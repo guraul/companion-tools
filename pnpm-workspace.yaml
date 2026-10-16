@@ -1,0 +1,5 @@
+# pnpm 11 的 strictDepBuilds 默认开启：未在 allowBuilds 里表态的构建脚本会让
+# `pnpm install` **退出 1**（install.sh 的 set -e 会因此中断在依赖安装那步）。
+# allowBuilds 的取值必须与实际依赖树一致——这里在首建时按 `pnpm install` 的
+# "Ignored build scripts" 提示逐项表态；新增依赖后要重新核对。
+allowBuilds: {}

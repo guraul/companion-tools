@@ -1,0 +1,42 @@
+{
+  "name": "companion-tools",
+  "version": "0.1.0",
+  "description": "companion 只读工具插件（opencode v2）：assignment_history / session_status",
+  "type": "module",
+  "main": "src/hosts/opencode/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "companion",
+    "read-only"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/"
+  ],
+  "directories": {
+    "test": "tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guraul/companion-tools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/guraul/companion-tools/issues"
+  },
+  "homepage": "https://github.com/guraul/companion-tools#readme",
+  "dependencies": {
+    "@opencode/plugin": "^2.0.26",
+    "@opencode/client": "^2.0.26"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
