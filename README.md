@@ -31,6 +31,8 @@ companion（agent-mobile 手机端）用的 **opencode v2 只读工具插件**�
 两个工具都声明 `options: { codemode: false }`：本机 companion 白名单没有 `execute` 的 allow，
 不声明则宿主会要求走 code-mode 包装，工具将**彻底不可达**（memx 已踩过此坑）。
 
+**时间字段契约（issue #3）**：与 BFF 交换的时间字段（`occurredAt` / `activatedAt`）一律是 **epoch 毫秒 number**（来源 homebase `product_events.occurred_at`，13 位），**不是 ISO 字符串**；测试 fixture 必须用真实契约类型，**禁止用 ISO 字符串自造契约**（否则漏测）。
+
 ## 安装
 
 ```bash

@@ -104,11 +104,28 @@ function pickString(record: Record<string, unknown>, key: string): string | unde
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-/** ISO 时间戳收成「YYYY-MM-DD HH:MM」；非 ISO 原样返回（不猜） */
-function shortTime(value: string | undefined): string {
-  if (value === undefined) return "时间未知";
-  const iso = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(value);
-  return iso ? `${iso[1]} ${iso[2]}` : value;
+/**
+ * 时间戳收成「YYYY-MM-DD HH:MM」。
+ *
+ * 契约：BFF 投影的 `occurredAt` / `activatedAt` 都是 **epoch 毫秒 number**
+ * （来源 homebase `product_events.occurred_at`，13 位）——**不是** ISO 字符串。
+ * 此前的实现只认字符串，导致 history 时间全丢、matched 的「激活」整行被静默丢弃。
+ * string 分支仅为向后兼容旧响应/旧 fixture 保留。
+ *
+ * 时区依据：history 项里**没有** timezone 字段——BFF 只在 matched 上投影 `Asia/Shanghai`；
+ * 而 Asia/Shanghai **无夏令时**，故一律按固定 UTC+8 渲染（不读宿主机器时区，避免引入不确定性）。
+ */
+function shortTime(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return new Date(value + 8 * 3600_000).toISOString().slice(0, 16).replace("T", " ");
+  }
+  if (typeof value === "string") {
+    const iso = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(value);
+    if (iso) return `${iso[1]} ${iso[2]}`;
+    if (value !== "") return value;
+  }
+  // 措辞刻意陈述事实：旧文案「时间未知」曾被现场模型当作「无法确认时段」的证据而得出错误结论。
+  return "该记录未含执行时刻";
 }
 
 function formatMatched(item: unknown): string {
@@ -123,8 +140,8 @@ function formatMatched(item: unknown): string {
   const timezone = pickString(record, "timezone");
   const schedule = pickString(record, "schedule");
   if (schedule !== undefined) parts.push(`计划 ${schedule}${timezone !== undefined ? `（${timezone}）` : ""}`);
-  const activatedAt = pickString(record, "activatedAt");
-  if (activatedAt !== undefined) parts.push(`激活 ${shortTime(activatedAt)}`);
+  const activatedAt = record.activatedAt;
+  if (activatedAt !== undefined && activatedAt !== null) parts.push(`激活 ${shortTime(activatedAt)}`);
   const suffix = parts.length > 0 ? `（${parts.join(" / ")}）` : "";
   return `- ${responsibility}（id: ${id}）${suffix}`;
 }
@@ -140,7 +157,7 @@ function formatHistoryItem(item: unknown, index: number): string {
   const reason = pickString(record, "reason");
   if (reason !== undefined) bits.push(`原因：${reason}`);
   const detail = bits.length > 0 ? `，${bits.join("，")}` : "";
-  return `  ${index + 1}) ${shortTime(pickString(record, "occurredAt"))} ${label} —— ${status}${detail}`;
+  return `  ${index + 1}) ${shortTime(record.occurredAt)} ${label} —— ${status}${detail}`;
 }
 
 /**

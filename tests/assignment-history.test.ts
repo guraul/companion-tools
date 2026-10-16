@@ -9,6 +9,8 @@ import {
   validateQuery,
 } from "../src/core/assignment-history.ts";
 
+// 契约来源：homebase `product_events.occurred_at`，**13 位 epoch 毫秒 number**（非 ISO 字符串）。
+// fixture 必须用真实契约类型，否则旧实现（只认字符串）会漏测（见 issue #3）。
 const singleMatch = {
   matched: [
     {
@@ -16,14 +18,14 @@ const singleMatch = {
       responsibility: "交房租",
       domain: "finance",
       state: "active",
-      activatedAt: "2026-10-01T08:30:00.000Z",
+      activatedAt: 1790843400000, // 2026-10-01T08:30:00Z
       schedule: "0 9 1 * *",
       timezone: "Asia/Shanghai",
     },
   ],
   history: [
-    { occurredAt: "2026-10-01T09:01:00.000Z", label: "执行", status: "succeeded", id: "h1" },
-    { occurredAt: "2026-09-01T09:02:00.000Z", label: "执行", status: "failed", attempt: 2, retried: true, reason: "余额不足", id: "h2" },
+    { occurredAt: 1790845260000, label: "执行", status: "succeeded", id: "h1" }, // 2026-10-01T09:01:00Z
+    { occurredAt: 1788253320000, label: "执行", status: "failed", attempt: 2, retried: true, reason: "余额不足", id: "h2" }, // 2026-09-01T09:02:00Z
   ],
   ambiguous: false,
   truncated: false,
@@ -88,6 +90,12 @@ describe("formatAssignmentHistory", () => {
     expect(text).toContain("第 2 次");
     expect(text).toContain("含重试");
     expect(text).toContain("余额不足");
+    // 时间渲染：epoch 毫秒按固定 UTC+8 → YYYY-MM-DD HH:MM（issue #3）
+    expect(text).toContain("2026-10-01 17:01");
+    expect(text).toContain("2026-09-01 17:02");
+    // matched 的「激活」行必须出现（旧实现在 number 下整行被静默丢弃）
+    expect(text).toContain("激活 2026-10-01 16:30");
+    expect(text).not.toContain("该记录未含执行时刻");
     // 不吐原始 JSON
     expect(text).not.toContain("{");
   });
@@ -127,6 +135,52 @@ describe("formatAssignmentHistory", () => {
     expect(() => formatAssignmentHistory(null)).not.toThrow();
     expect(formatAssignmentHistory(null)).toContain("没有找到匹配的责任");
     expect(formatAssignmentHistory("boom")).toContain("没有找到匹配的责任");
+  });
+});
+
+describe("formatAssignmentHistory · 时间渲染（issue #3）", () => {
+  it("epoch 毫秒 → 固定 UTC+8 渲染 YYYY-MM-DD HH:MM", () => {
+    const text = formatAssignmentHistory({
+      matched: [{ id: "a1", responsibility: "交房租" }],
+      // 2026-09-11T01:47:00Z == 2026-09-11 09:47（UTC+8）
+      history: [{ occurredAt: 1789091220000, label: "执行", status: "succeeded", id: "h1" }],
+      ambiguous: false,
+      truncated: false,
+    });
+    expect(text).toContain("2026-09-11 09:47");
+  });
+
+  it("缺 occurredAt → 兜底文案「该记录未含执行时刻」（陈述事实，不作结论）", () => {
+    const text = formatAssignmentHistory({
+      matched: [{ id: "a1", responsibility: "交房租" }],
+      history: [{ label: "执行", status: "succeeded", id: "h1" }],
+      ambiguous: false,
+      truncated: false,
+    });
+    expect(text).toContain("该记录未含执行时刻");
+    expect(text).not.toContain("时间未知");
+  });
+
+  it("matched 带 activatedAt（number）→ 渲染「激活 …」行", () => {
+    const text = formatAssignmentHistory({
+      matched: [{ id: "a1", responsibility: "交房租", activatedAt: 1790843400000 }], // 2026-10-01 16:30 (+8)
+      history: [],
+      ambiguous: false,
+      truncated: false,
+    });
+    expect(text).toContain("激活");
+    expect(text).toContain("激活 2026-10-01 16:30");
+  });
+
+  it("向后兼容：ISO 字符串仍按原样收成 YYYY-MM-DD HH:MM", () => {
+    const text = formatAssignmentHistory({
+      matched: [{ id: "a1", responsibility: "交房租", activatedAt: "2026-10-01T08:30:00.000Z" }],
+      history: [{ occurredAt: "2026-10-01T09:01:00.000Z", label: "执行", status: "succeeded", id: "h1" }],
+      ambiguous: false,
+      truncated: false,
+    });
+    expect(text).toContain("2026-10-01 09:01");
+    expect(text).toContain("激活 2026-10-01 08:30");
   });
 });
 

@@ -89,7 +89,8 @@ describe("assignment_history · execute 完整路径（mock fetch）", () => {
       new Response(
         JSON.stringify({
           matched: [{ id: "asg_1", responsibility: "交房租", state: "active" }],
-          history: [{ occurredAt: "2026-10-01T09:00:00.000Z", label: "执行", status: "succeeded", id: "h1" }],
+          // 契约：homebase product_events.occurred_at = 13 位 epoch 毫秒 number
+          history: [{ occurredAt: 1790845200000, label: "执行", status: "succeeded", id: "h1" }],
           ambiguous: false,
           truncated: false,
         }),
@@ -111,6 +112,8 @@ describe("assignment_history · execute 完整路径（mock fetch）", () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
     expect(String(result.content)).toContain("匹配到 1 条责任");
     expect(String(result.content)).toContain("交房租");
+    // epoch 毫秒按固定 UTC+8 渲染（issue #3）
+    expect(String(result.content)).toContain("2026-10-01 17:00");
   });
 
   it("401 → 中文 token 提示，绝不抛", async () => {
