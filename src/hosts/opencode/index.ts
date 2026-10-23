@@ -1,8 +1,10 @@
 // companion-tools · opencode v2 插件壳
 //
-// 切片 2（本文件当前内容）：注册两个**只读**工具。
+// 注册三个**只读**工具：
 //   - assignment_history  → 经 HTTP 调 homebase 内部只读端点（跨进程，token 鉴权）
+//   - project_sessions    → 经 HTTP 调 homebase 内部只读端点；插件侧再过滤为 chatcode 侧
 //   - session_status      → 进程内 ctx.session.context + ctx.session.get
+//                           显式 sessionId 只允许 chatcode 侧；目录不可得 → 保守拒绝。
 //
 // 红线（与 memx/AGENTS.md 的宿主入口红线同源）：
 //   本文件**只 export default 插件**。多导出任何命名符号（函数/常量/类型值）都会被宿主
@@ -25,6 +27,17 @@ import {
   validateQuery,
 } from "../../core/assignment-history.ts";
 import { buildSessionStatus, sessionUnavailableMessage } from "../../core/session-status.ts";
+import {
+  buildProjectSessionsUrl,
+  describeProjectSessionsHttpFailure,
+  describeProjectSessionsNetworkFailure,
+  describeProjectSessionsParseFailure,
+  formatProjectSessions,
+  isProjectDirectory,
+  sessionChatScopeMessage,
+  sessionScopeUnknownMessage,
+  validateProjectSessionsInput,
+} from "../../core/project-sessions.ts";
 
 // 装载痕迹落盘位置（可用 COMPANION_TOOLS_LOG 覆盖，测试用 tmp 路径，避免污染真实 HOME）。
 const LOG_FILE = process.env.COMPANION_TOOLS_LOG ?? join(homedir(), ".opencode", "companion-tools.log");
@@ -137,6 +150,60 @@ export default Plugin.define({
         });
 
         editor.add({
+          name: "project_sessions",
+          description:
+            "列出 chatcode 侧（绑定真实项目目录）的会话，按最近更新倒序（只读）。可给出 projectPath 只看某个项目；伴侣聊天会话（目录为空、根目录或伴侣大本营）一律不展示。经 BFF 内部只读端点查询。",
+          input: {
+            type: "object",
+            properties: {
+              projectPath: {
+                type: "string",
+                description: "项目绝对路径（如 /root/project/agent-mobile）；缺省列出所有项目会话",
+              },
+              limit: {
+                type: "integer",
+                minimum: 1,
+                maximum: 20,
+                description: "最多返回多少个会话，缺省 10",
+              },
+            },
+            required: [],
+          },
+          options: { codemode: false },
+          async execute(args, toolCtx) {
+            const input = (args ?? {}) as { projectPath?: unknown; limit?: unknown };
+            const validation = validateProjectSessionsInput(input);
+            if (!validation.ok) return { content: validation.message };
+
+            try {
+              const configResult = parseConfig(readConfigText());
+              if (!configResult.ok) return { content: configResult.message };
+
+              const url = buildProjectSessionsUrl(configResult.config, validation.query);
+              const response = await fetch(url, {
+                method: "GET",
+                headers: { "x-internal-token": configResult.config.token },
+                signal: requestSignal(toolCtx.signal),
+              });
+
+              const body = await response.text();
+              if (!response.ok) return { content: describeProjectSessionsHttpFailure(response.status, body) };
+
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(body);
+              } catch {
+                return { content: describeProjectSessionsParseFailure() };
+              }
+              // 范围约束：formatProjectSessions 内部的 parse 会剔除 chat 侧会话。
+              return { content: formatProjectSessions(parsed) };
+            } catch (error) {
+              return { content: describeProjectSessionsNetworkFailure(error) };
+            }
+          },
+        });
+
+        editor.add({
           name: "session_status",
           description:
             "读取当前（或指定）会话的状态：标题、目录、消息数，以及最近几条 user/assistant 文本摘要（只读，进程内读取；不含系统提示、工具调用与推理内容）。",
@@ -150,10 +217,26 @@ export default Plugin.define({
           options: { codemode: false },
           async execute(args, toolCtx) {
             const input = (args ?? {}) as { sessionId?: unknown };
-            const sessionID =
-              typeof input.sessionId === "string" && input.sessionId.trim() !== ""
-                ? input.sessionId.trim()
-                : toolCtx.sessionID;
+            const requested =
+              typeof input.sessionId === "string" ? input.sessionId.trim() : "";
+            const explicitSessionId = requested !== "";
+            const sessionID = explicitSessionId ? requested : toolCtx.sessionID;
+
+            // 范围约束（只读 chatcode 侧）：缺省（当前会话）放行；显式 sessionId 必须能取到
+            // 目录且属于项目侧。目录取不到 → 保守拒绝（无法判断范围就不放行）。
+            if (explicitSessionId) {
+              let directory: string | undefined;
+              try {
+                const info = await ctx.session.get({ sessionID });
+                const dir = info.location?.directory;
+                if (typeof dir === "string" && dir.trim() !== "") directory = dir;
+              } catch {
+                return { content: sessionScopeUnknownMessage(sessionID) };
+              }
+              if (directory === undefined) return { content: sessionScopeUnknownMessage(sessionID) };
+              if (!isProjectDirectory(directory)) return { content: sessionChatScopeMessage(sessionID) };
+            }
+
             try {
               const raw = await ctx.session.context({ sessionID });
 
