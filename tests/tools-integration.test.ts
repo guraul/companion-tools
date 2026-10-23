@@ -193,10 +193,183 @@ describe("session_status · execute 完整路径（进程内）", () => {
   });
 });
 
+describe("project_sessions · execute 完整路径（mock fetch）", () => {
+  it("无配置 → 未配置中文提示，且不发请求", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({}, fakeToolContext());
+
+    expect(String(result.content)).toContain("未配置 BFF 地址或 token");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("参数非法（相对路径 / limit 越界）→ 提示，且不发请求", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { tool } = await setup();
+
+    const relative = await tool("project_sessions").execute({ projectPath: "repo/a" }, fakeToolContext());
+    expect(String(relative.content)).toContain("绝对路径");
+
+    const badLimit = await tool("project_sessions").execute({ limit: 99 }, fakeToolContext());
+    expect(String(badLimit.content)).toContain("limit 必须是");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("成功 → URL/鉴权头正确；只显示 chatcode 侧、按更新时间倒序、截断提示", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234/", token: "tok" }));
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          sessions: [
+            { id: "ses_old", title: "旧会话", directory: "/repo/a", updatedAt: 1790845200000 },
+            { id: "ses_chat", title: "伴侣陪聊", directory: "/root/project/homebase", updatedAt: 1790845300000 },
+            { id: "ses_new", title: "新会话", directory: "/repo/a/", updatedAt: 1790845600000 },
+            { id: "ses_root", title: "裸进", directory: "/", updatedAt: 1790845700000 },
+          ],
+          truncated: true,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute(
+      { projectPath: "/repo/a/", limit: 3 },
+      fakeToolContext(),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      { headers: Record<string, string>; signal: AbortSignal },
+    ];
+    expect(url).toBe(
+      "http://127.0.0.1:19234/api/internal/project-sessions?limit=3&directory=%2Frepo%2Fa",
+    );
+    expect(init.headers["x-internal-token"]).toBe("tok");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+
+    const text = String(result.content);
+    expect(text).toContain("ses_new · 新会话 · /repo/a/ · 2026-10-01 17:06");
+    expect(text.indexOf("ses_new")).toBeLessThan(text.indexOf("ses_old"));
+    expect(text).not.toContain("ses_chat");
+    expect(text).not.toContain("伴侣陪聊");
+    expect(text).not.toContain("ses_root");
+    expect(text).toContain("更早的会话已截断");
+  });
+
+  it("空结果 → 明确文案", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ sessions: [], truncated: false }), { status: 200 })),
+    );
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({}, fakeToolContext());
+
+    expect(String(result.content)).toContain("没有找到可展示的项目会话");
+  });
+
+  it("401 → 中文 token 提示，绝不抛", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "wrong" }));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response('{"error":"unauthorized"}', { status: 401 })));
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({}, fakeToolContext());
+
+    expect(String(result.content)).toContain("token 未配置或值不正确");
+  });
+
+  it("网络错 → 中文提示，绝不抛", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({}, fakeToolContext());
+
+    expect(String(result.content)).toContain("无法连接 BFF");
+  });
+});
+
+describe("session_status · 范围约束（只读 chatcode 侧）", () => {
+  it("缺省（当前会话）放行：即使当前会话是 chat 侧", async () => {
+    const { host, tool } = await setup();
+    host.setSessionInfo({ id: "ses_current", title: "陪聊", location: { directory: "/" } });
+    host.setMessages([{ id: "m1", type: "user", text: "你好" }]);
+
+    const result = await tool("session_status").execute({}, fakeToolContext("ses_current"));
+
+    expect(String(result.content)).toContain("会话状态");
+    expect(String(result.content)).toContain("消息数：1");
+  });
+
+  it("显式 chat 侧 sessionId → 拒绝（伴侣大本营）", async () => {
+    const { host, tool } = await setup();
+    host.setSessionInfo({
+      id: "ses_chat",
+      title: "伴侣",
+      location: { directory: "/root/project/homebase" },
+    });
+
+    const result = await tool("session_status").execute({ sessionId: "ses_chat" }, fakeToolContext("ses_current"));
+
+    expect(String(result.content)).toContain("拒绝读取会话 ses_chat");
+    expect(String(result.content)).toContain("chat");
+  });
+
+  it("显式项目侧 sessionId → 放行", async () => {
+    const { host, tool } = await setup();
+    host.setSessionInfo({
+      id: "ses_proj",
+      title: "项目会话",
+      location: { directory: "/root/project/agent-mobile" },
+    });
+    host.setMessages([{ id: "m1", type: "user", text: "hi" }]);
+
+    const result = await tool("session_status").execute({ sessionId: "ses_proj" }, fakeToolContext("ses_current"));
+
+    expect(String(result.content)).toContain("会话状态");
+    expect(String(result.content)).toContain("ID：ses_proj");
+    expect(String(result.content)).toContain("目录：/root/project/agent-mobile");
+  });
+
+  it("目录不可得 → 保守拒绝", async () => {
+    const { host, tool } = await setup();
+    host.setSessionInfo({ id: "ses_no_dir", title: "无目录" });
+
+    const result = await tool("session_status").execute({ sessionId: "ses_no_dir" }, fakeToolContext("ses_current"));
+
+    expect(String(result.content)).toContain("保守拒绝");
+  });
+
+  it("session.get 抛错 → 保守拒绝", async () => {
+    const { host, tool } = await setup();
+    host.setSessionGetThrows(true);
+
+    const result = await tool("session_status").execute({ sessionId: "ses_x" }, fakeToolContext("ses_current"));
+
+    expect(String(result.content)).toContain("保守拒绝");
+  });
+});
+
 describe("codemode:false 存在性（否则本机白名单下工具彻底不可达）", () => {
-  it("两个工具都声明了 options.codemode === false", async () => {
+  it("三个工具都声明了 options.codemode === false", async () => {
     const { host } = await setup();
     expect(host.tools.get("assignment_history")?.options).toEqual({ codemode: false });
+    expect(host.tools.get("project_sessions")?.options).toEqual({ codemode: false });
     expect(host.tools.get("session_status")?.options).toEqual({ codemode: false });
   });
 });
+

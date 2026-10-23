@@ -52,25 +52,30 @@ describe("插件壳结构", () => {
     expect(() => (cleanup as () => void)()).not.toThrow();
   });
 
-  it("切片 2 注册两个只读工具：assignment_history 与 session_status", async () => {
+  it("注册三个只读工具：assignment_history、project_sessions 与 session_status", async () => {
     const host = createFakeHost();
 
     await plugin.setup(host.ctx);
 
     expect(host.state.transformCalls).toBe(1);
-    expect([...host.tools.keys()].sort()).toEqual(["assignment_history", "session_status"]);
+    expect([...host.tools.keys()].sort()).toEqual([
+      "assignment_history",
+      "project_sessions",
+      "session_status",
+    ]);
     for (const tool of host.tools.values()) {
       expect(typeof tool.execute).toBe("function");
       expect(tool.description.length).toBeGreaterThan(0);
     }
   });
 
-  it("反证锚点：两个工具都必须声明 options.codemode === false", async () => {
+  it("反证锚点：三个工具都必须声明 options.codemode === false", async () => {
     const host = createFakeHost();
 
     await plugin.setup(host.ctx);
 
     expect(host.tools.get("assignment_history")?.options).toEqual({ codemode: false });
+    expect(host.tools.get("project_sessions")?.options).toEqual({ codemode: false });
     expect(host.tools.get("session_status")?.options).toEqual({ codemode: false });
   });
 });
