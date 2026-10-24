@@ -1,9 +1,14 @@
 // companion-tools · project_sessions 的纯函数（可单测）
 //
 // 职责边界（宿主侧 execute 只做接线）：
-//   参数校验 → validateProjectSessionsInput；URL 拼装 → buildProjectSessionsUrl；
-//   响应 → 过滤/排序 → parseProjectSessions；中文文本 → formatProjectSessions；
+//   参数校验 → validateProjectSessionsInput；URL 拼装（含多取） → buildProjectSessionsUrl；
+//   响应 → 过滤/排序 → parseProjectSessions → 截断 → finalizeSessions；
+//   中文文本 → formatProjectSessions；
 //   错误 → 中文文本 → describeProjectSessionsHttpFailure / …NetworkFailure / …ParseFailure。
+//
+// 分页顺序（issue #9）：BFF 先按 limit 截断，插件后按 chat 侧规则过滤——若直接把用户的
+//   limit 传给 BFF，最近活动全是聊天时一页可能只剩 1–2 条。故请求时按
+//   fetchLimit = min(20, max(limit * 3, limit)) 多取，过滤后再截断到用户 limit。
 //
 // 契约（homebase `GET /api/internal/project-sessions`，见 homebase PR #50 / issue #49；
 //   `agent` 字段见 homebase issue #51）：
@@ -28,6 +33,9 @@ import type { CompanionConfig } from "./config.ts";
 export const DEFAULT_LIMIT = 10;
 export const MIN_LIMIT = 1;
 export const MAX_LIMIT = 20;
+
+/** 多取倍数：过滤掉 chat 侧会话后仍要凑够用户要的条数（上限仍是 BFF 的 MAX_LIMIT） */
+export const FETCH_LIMIT_MULTIPLIER = 3;
 
 /** 伴侣聊天大本营（agent-mobile conversation-kind.ts 的 MARKET_TALK_DIRECTORY；勿跨仓 import） */
 export const COMPANION_HOME_DIRECTORY = "/root/project/homebase";
@@ -109,11 +117,16 @@ export function validateProjectSessionsInput(input: ProjectSessionsInput): Proje
   };
 }
 
-/** 拼 URL：base 去尾部斜杠，参数走 URLSearchParams 编码 */
+/** 实际向 BFF 请求的条数：min(20, max(limit * 3, limit))——先多取，过滤后再截断到用户的 limit */
+export function resolveFetchLimit(limit: number): number {
+  return Math.min(MAX_LIMIT, Math.max(limit * FETCH_LIMIT_MULTIPLIER, limit));
+}
+
+/** 拼 URL：base 去尾部斜杠，参数走 URLSearchParams 编码；limit 一律按 resolveFetchLimit 多取 */
 export function buildProjectSessionsUrl(config: CompanionConfig, query: ProjectSessionsQuery): string {
   const base = config.bffBase.replace(/\/+$/, "");
   const params = new URLSearchParams();
-  params.set("limit", String(query.limit));
+  params.set("limit", String(resolveFetchLimit(query.limit)));
   if (query.directory !== undefined) params.set("directory", query.directory);
   return `${base}/api/internal/project-sessions?${params.toString()}`;
 }
@@ -167,6 +180,28 @@ export function parseProjectSessions(response: unknown): { readonly sessions: Pr
   return { sessions, truncated: record.truncated === true };
 }
 
+export interface FinalizedProjectSessions {
+  readonly sessions: ProjectSession[];
+  /** 服务端（BFF）已截断，**或** 过滤后条数超过用户 limit（本地截断） */
+  readonly truncated: boolean;
+}
+
+/**
+ * 过滤后的最终分页：截断到用户 limit，并合成 truncated 语义。
+ * `serverTruncated` 表示 BFF 在多取的窗口里还有更早的会话没返回；本地条数超出 limit
+ * 表示窗口内还有更早会话没展示——两者都该提示「更早的会话已截断」。
+ */
+export function finalizeSessions(
+  sessions: readonly ProjectSession[],
+  limit: number,
+  serverTruncated: boolean,
+): FinalizedProjectSessions {
+  return {
+    sessions: sessions.slice(0, limit),
+    truncated: serverTruncated || sessions.length > limit,
+  };
+}
+
 /** 时间戳收成「YYYY-MM-DD HH:MM」（epoch 毫秒，固定 UTC+8——Asia/Shanghai 无夏令时） */
 function formatUpdatedAt(value: unknown): string {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
@@ -186,19 +221,23 @@ function formatSession(session: ProjectSession): string {
   return `${session.id} · ${title} · ${session.directory} · ${formatUpdatedAt(session.updatedAt)}`;
 }
 
-/** 响应 → 给模型读的简洁中文文本。**绝不抛**：形状再怪也退化成明确文案。 */
-export function formatProjectSessions(response: unknown): string {
+/**
+ * 响应 → 给模型读的简洁中文文本。**绝不抛**：形状再怪也退化成明确文案。
+ * `limit` 是用户请求的条数（过滤后截断用；缺省 DEFAULT_LIMIT）。
+ */
+export function formatProjectSessions(response: unknown, limit: number = DEFAULT_LIMIT): string {
   const parsed = parseProjectSessions(response);
   if (parsed === null) return "读取项目会话失败：服务端响应格式不符合预期。";
 
-  if (parsed.sessions.length === 0) {
+  const finalized = finalizeSessions(parsed.sessions, limit, parsed.truncated);
+  if (finalized.sessions.length === 0) {
     return "没有找到可展示的项目会话。（本工具只读 chatcode 侧会话；伴侣聊天会话不在此列。）";
   }
 
-  const head = `项目会话（最近更新在前，共 ${parsed.sessions.length} 条）：`;
-  const lines = parsed.sessions.map(formatSession);
-  const tail = parsed.truncated
-    ? ["", `（仅显示最近 ${parsed.sessions.length} 条，更早的会话已截断）`]
+  const head = `项目会话（最近更新在前，共 ${finalized.sessions.length} 条）：`;
+  const lines = finalized.sessions.map(formatSession);
+  const tail = finalized.truncated
+    ? ["", `（仅显示最近 ${finalized.sessions.length} 条，更早的会话已截断）`]
     : [];
   return [head, ...lines, ...tail].join("\n");
 }

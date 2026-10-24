@@ -48,6 +48,11 @@ companion（agent-mobile 手机端）用的 **opencode v2 只读工具插件**�
 - `session_status`：**缺省（当前会话）放行**；显式 `sessionId` 时用 `ctx.session.get` 取目录——
   chat 侧 → 拒绝并说明原因；**目录取不到 → 保守拒绝**（无法判断范围就不放行）。
 
+**分页顺序（issue #9）**：BFF 先按 `limit` 截断、插件后过滤，所以 `project_sessions` 请求时**多取**——
+`fetchLimit = min(20, max(limit * 3, limit))`（BFF 上限 20），拿到响应后先过滤 chat 侧，再截断到用户
+`limit`。`truncated` = 服务端截断 **或** 过滤后条数超过 `limit`，两种情况末尾都会提示「更早的会话已截断」。
+这样最近活动全是聊天时，也不会一页只剩 1–2 条。
+
 **生产生效前提（切片 4）**：① homebase 部署含 `GET /api/internal/project-sessions` 的版本并投放
 `INTERNAL_READ_TOKEN`；② 本插件安装/更新到宿主；③ companion agent 的 tools 白名单加入
 `project_sessions`（否则工具虽注册但不可调用）；④ 重启 opencode 宿主（插件在启动时一次性加载）。

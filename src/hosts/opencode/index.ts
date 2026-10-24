@@ -195,9 +195,9 @@ export default Plugin.define({
               } catch {
                 return { content: describeProjectSessionsParseFailure() };
               }
-              // 范围约束：formatProjectSessions 内部的 parse 会剔除 chat 侧会话
-              // （目录判据 + agent=companion 判据，见 core/project-sessions.ts）。
-              return { content: formatProjectSessions(parsed) };
+              // 范围约束 + 分页顺序（issue #9）：URL 里按 resolveFetchLimit 多取，
+              // formatProjectSessions 内部再过滤 chat 侧并截断到用户请求的 limit。
+              return { content: formatProjectSessions(parsed, validation.query.limit) };
             } catch (error) {
               return { content: describeProjectSessionsNetworkFailure(error) };
             }
