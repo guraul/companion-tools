@@ -5,16 +5,21 @@
 //   响应 → 过滤/排序 → parseProjectSessions；中文文本 → formatProjectSessions；
 //   错误 → 中文文本 → describeProjectSessionsHttpFailure / …NetworkFailure / …ParseFailure。
 //
-// 契约（homebase `GET /api/internal/project-sessions`，见 homebase PR #50 / issue #49）：
+// 契约（homebase `GET /api/internal/project-sessions`，见 homebase PR #50 / issue #49；
+//   `agent` 字段见 homebase issue #51）：
 //   query: limit（1-20，缺省 10）/ directory（绝对路径，可选）
 //   header: x-internal-token
-//   resp:   { sessions: [{ id, title?, directory, updatedAt?, messageCount? }], truncated }
+//   resp:   { sessions: [{ id, title?, directory, updatedAt?, messageCount?, agent? }], truncated }
 //   updatedAt 是 **epoch 毫秒 number**（opencode session.time.updated），不是 ISO 字符串。
 //
 // 范围约束（**插件侧**执行，不依赖服务端）：只展示 **chatcode 侧**会话。
-//   判据抄自 agent-mobile `agent-mobile-app/src/services/conversation-kind.ts` 的
+//   ① 目录判据抄自 agent-mobile `agent-mobile-app/src/services/conversation-kind.ts` 的
 //   resolveConversationKind：directory 为空 / "/" / 伴侣大本营 → chat（伴侣聊天）侧；
 //   其余 → chatcode（项目）侧。常量值在此**抄写**，**不跨仓 import**（两仓独立发布）。
+//   ② agent 判据：`agent === "companion"` → chat 侧。**必要补充**——生产聊天会话的
+//   directory 是 `/root/project`（不是伴侣大本营），①拦不住。只排除 companion，
+//   `agent` 缺失（上游没给）时保持放行，避免误伤老会话/其它 agent（build / general / plan）。
+//   范围过滤只在插件侧；BFF 只做投影，不按 agent 过滤。
 //
 // 纪律：本模块只读，绝不构造写请求。
 
@@ -27,11 +32,16 @@ export const MAX_LIMIT = 20;
 /** 伴侣聊天大本营（agent-mobile conversation-kind.ts 的 MARKET_TALK_DIRECTORY；勿跨仓 import） */
 export const COMPANION_HOME_DIRECTORY = "/root/project/homebase";
 
+/** 伴侣聊天会话使用的 agent id（opencode `Agent.ID` 取值之一）；范围判据的权威依据 */
+const COMPANION_AGENT_ID = "companion";
+
 export interface ProjectSession {
   readonly id: string;
   readonly title?: string;
   readonly directory: string;
   readonly updatedAt?: number;
+  /** opencode 会话的 agent id（build / general / plan / companion…）；上游没给则缺失 */
+  readonly agent?: string;
 }
 
 export interface ProjectSessionsInput {
@@ -122,11 +132,13 @@ function toProjectSession(value: unknown): ProjectSession | null {
   const updatedAt =
     typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt) ? record.updatedAt : undefined;
   const title = typeof record.title === "string" && record.title !== "" ? record.title : undefined;
+  const agent = typeof record.agent === "string" && record.agent !== "" ? record.agent : undefined;
   return {
     id,
     ...(title !== undefined ? { title } : {}),
     directory,
     ...(updatedAt !== undefined ? { updatedAt } : {}),
+    ...(agent !== undefined ? { agent } : {}),
   };
 }
 
@@ -140,6 +152,7 @@ function byUpdatedDesc(a: ProjectSession, b: ProjectSession): number {
 
 /**
  * 响应归一：抽 sessions、**剔除 chat 侧**、按更新时间倒序。
+ * chat 侧判据 = 目录判据不成立 **或** agent 为 companion（后者补上 `/root/project` 的漏洞）。
  * 形状不合法（无 sessions 数组）→ null（调用方给明确文案，不抛）。
  */
 export function parseProjectSessions(response: unknown): { readonly sessions: ProjectSession[]; readonly truncated: boolean } | null {
@@ -148,7 +161,7 @@ export function parseProjectSessions(response: unknown): { readonly sessions: Pr
 
   const sessions = record.sessions
     .map(toProjectSession)
-    .filter((s): s is ProjectSession => s !== null && isProjectDirectory(s.directory))
+    .filter((s): s is ProjectSession => s !== null && isProjectDirectory(s.directory) && s.agent !== COMPANION_AGENT_ID)
     .sort(byUpdatedDesc);
 
   return { sessions, truncated: record.truncated === true };

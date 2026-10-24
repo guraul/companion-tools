@@ -264,6 +264,46 @@ describe("project_sessions · execute 完整路径（mock fetch）", () => {
     expect(text).toContain("更早的会话已截断");
   });
 
+  it("agent=companion 的会话被剔除（生产聊天会话目录是 /root/project，目录判据拦不住）", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            sessions: [
+              {
+                id: "ses_chat_prod",
+                title: "伴侣陪聊",
+                directory: "/root/project",
+                updatedAt: 1790845600000,
+                agent: "companion",
+              },
+              {
+                id: "ses_proj",
+                title: "修登录",
+                directory: "/root/project/agent-mobile",
+                updatedAt: 1790845200000,
+                agent: "build",
+              },
+            ],
+            truncated: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({}, fakeToolContext());
+
+    const text = String(result.content);
+    expect(text).toContain("ses_proj · 修登录 · /root/project/agent-mobile · 2026-10-01 17:00");
+    expect(text).toContain("共 1 条");
+    expect(text).not.toContain("ses_chat_prod");
+    expect(text).not.toContain("伴侣陪聊");
+  });
+
   it("空结果 → 明确文案", async () => {
     writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
     vi.stubGlobal(
