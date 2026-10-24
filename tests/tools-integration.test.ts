@@ -304,6 +304,77 @@ describe("project_sessions · execute 完整路径（mock fetch）", () => {
     expect(text).not.toContain("伴侣陪聊");
   });
 
+  // issue #11：App 聊天会话目录 = /root/project（agent 可能缺失），默认排除表必须拦住。
+  it("默认排除表：agent 缺失的 /root/project 会话被剔除，子目录会话保留", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            sessions: [
+              { id: "ses_chat_old", title: "简单确认回复", directory: "/root/project", updatedAt: 1790845600000 },
+              { id: "ses_chat_old2", title: "要求仅回复ok", directory: "/root/project/", updatedAt: 1790845500000 },
+              {
+                id: "ses_proj",
+                title: "修登录",
+                directory: "/root/project/agent-mobile",
+                updatedAt: 1790845200000,
+                agent: "build",
+              },
+            ],
+            truncated: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({}, fakeToolContext());
+
+    const text = String(result.content);
+    expect(text).toContain("ses_proj · 修登录 · /root/project/agent-mobile · 2026-10-01 17:00");
+    expect(text).toContain("共 1 条");
+    expect(text).not.toContain("ses_chat_old");
+    expect(text).not.toContain("简单确认回复");
+  });
+
+  // issue #11：配置 excludedDirectories 生效，且**整体替换**默认值。
+  it("配置 excludedDirectories：/tmp/x 被剔除、/root/project 反而保留", async () => {
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        bffBase: "http://127.0.0.1:19234",
+        token: "tok",
+        excludedDirectories: ["/tmp/x"],
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            sessions: [
+              { id: "ses_tmp", title: "临时目录聊天", directory: "/tmp/x", updatedAt: 1790845600000 },
+              { id: "ses_root_proj", title: "根目录会话", directory: "/root/project", updatedAt: 1790845200000 },
+            ],
+            truncated: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({}, fakeToolContext());
+
+    const text = String(result.content);
+    expect(text).toContain("ses_root_proj · 根目录会话 · /root/project · 2026-10-01 17:00");
+    expect(text).toContain("共 1 条");
+    expect(text).not.toContain("ses_tmp");
+  });
+
   it("先多取后截断：limit=3 请求 limit=9，过滤后 5 条仍只展示 3 条并提示截断", async () => {
     writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
     const fetchMock = vi.fn(async () =>
