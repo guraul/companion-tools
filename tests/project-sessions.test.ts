@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   COMPANION_HOME_DIRECTORY,
   buildProjectSessionsUrl,
+  finalizeSessions,
   formatProjectSessions,
   isProjectDirectory,
   normalizeDirectory,
   parseProjectSessions,
+  resolveFetchLimit,
   validateLimit,
   validateProjectSessionsInput,
 } from "../src/core/project-sessions.ts";
@@ -83,6 +85,45 @@ describe("validateProjectSessionsInput", () => {
     const r = validateProjectSessionsInput({ projectPath: "repo/a" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain("绝对路径");
+  });
+});
+
+describe("resolveFetchLimit（先多取，过滤后再截断）", () => {
+  it("按 3 倍放大", () => {
+    expect(resolveFetchLimit(1)).toBe(3);
+    expect(resolveFetchLimit(3)).toBe(9);
+    expect(resolveFetchLimit(6)).toBe(18);
+  });
+
+  it("封顶 BFF 上限 20", () => {
+    expect(resolveFetchLimit(7)).toBe(20);
+    expect(resolveFetchLimit(10)).toBe(20);
+    expect(resolveFetchLimit(20)).toBe(20);
+  });
+});
+
+describe("finalizeSessions（截断到用户 limit + truncated 语义）", () => {
+  const many = Array.from({ length: 5 }, (_, i) => ({ id: `s${i}`, directory: "/repo/a" }));
+
+  it("过滤后 5 条、limit=3 → 截断为 3 条并提示", () => {
+    const finalized = finalizeSessions(many, 3, false);
+    expect(finalized.sessions.map((s) => s.id)).toEqual(["s0", "s1", "s2"]);
+    expect(finalized.truncated).toBe(true);
+  });
+
+  it("过滤后 2 条、limit=3、服务端未截断 → 不提示", () => {
+    expect(finalizeSessions(many.slice(0, 2), 3, false)).toEqual({
+      sessions: many.slice(0, 2),
+      truncated: false,
+    });
+  });
+
+  it("服务端已截断（即便本地不够 limit）→ 提示", () => {
+    expect(finalizeSessions(many.slice(0, 2), 3, true).truncated).toBe(true);
+  });
+
+  it("刚好等于 limit → 不提示", () => {
+    expect(finalizeSessions(many.slice(0, 3), 3, false).truncated).toBe(false);
   });
 });
 
@@ -188,6 +229,43 @@ describe("formatProjectSessions", () => {
     expect(text).toContain("更早的会话已截断");
   });
 
+  // issue #9：先过滤再按用户 limit 截断。
+  it("过滤后 5 条、limit=3 → 只展示 3 条并提示截断", () => {
+    const text = formatProjectSessions(
+      response([
+        { id: "ses_1", directory: "/repo/a", updatedAt: HOUR + 4_000 },
+        { id: "chat", directory: "/", updatedAt: HOUR + 3_500 },
+        { id: "ses_2", directory: "/repo/a", updatedAt: HOUR + 3_000 },
+        { id: "ses_3", directory: "/repo/a", updatedAt: HOUR + 2_000 },
+        { id: "ses_4", directory: "/repo/a", updatedAt: HOUR + 1_000 },
+        { id: "ses_5", directory: "/repo/a", updatedAt: HOUR },
+      ]),
+      3,
+    );
+
+    expect(text).toContain("共 3 条");
+    expect(text).toContain("ses_1");
+    expect(text).toContain("ses_3");
+    expect(text).not.toContain("ses_4");
+    expect(text).not.toContain("ses_5");
+    expect(text).toContain("更早的会话已截断");
+  });
+
+  it("过滤后 2 条、limit=3、服务端未截断 → 2 条且不提示截断", () => {
+    const text = formatProjectSessions(
+      response([
+        { id: "ses_1", directory: "/repo/a", updatedAt: HOUR + 1_000 },
+        { id: "ses_2", directory: "/repo/a", updatedAt: HOUR },
+      ]),
+      3,
+    );
+
+    expect(text).toContain("共 2 条");
+    expect(text).toContain("ses_1");
+    expect(text).toContain("ses_2");
+    expect(text).not.toContain("已截断");
+  });
+
   it("空结果 → 明确文案（说明只读 chatcode 侧）", () => {
     const text = formatProjectSessions(response([]));
     expect(text).toContain("没有找到可展示的项目会话");
@@ -216,15 +294,21 @@ describe("formatProjectSessions", () => {
 describe("buildProjectSessionsUrl", () => {
   const config = { bffBase: "http://127.0.0.1:19234/", token: "tok" };
 
-  it("base 去尾斜杠 + limit 编码", () => {
+  it("base 去尾斜杠；limit 按 resolveFetchLimit 多取（3 → 9）", () => {
     expect(buildProjectSessionsUrl(config, { limit: 3 })).toBe(
-      "http://127.0.0.1:19234/api/internal/project-sessions?limit=3",
+      "http://127.0.0.1:19234/api/internal/project-sessions?limit=9",
+    );
+  });
+
+  it("limit=10 → 请求封顶 20", () => {
+    expect(buildProjectSessionsUrl(config, { limit: 10 })).toBe(
+      "http://127.0.0.1:19234/api/internal/project-sessions?limit=20",
     );
   });
 
   it("directory 走 URLSearchParams 编码（中文/空格/斜杠）", () => {
     expect(buildProjectSessionsUrl(config, { limit: 10, directory: "/repo/项目 a" })).toBe(
-      "http://127.0.0.1:19234/api/internal/project-sessions?limit=10&directory=%2Frepo%2F%E9%A1%B9%E7%9B%AE+a",
+      "http://127.0.0.1:19234/api/internal/project-sessions?limit=20&directory=%2Frepo%2F%E9%A1%B9%E7%9B%AE+a",
     );
   });
 });

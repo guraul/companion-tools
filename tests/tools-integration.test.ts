@@ -250,7 +250,7 @@ describe("project_sessions · execute 完整路径（mock fetch）", () => {
       { headers: Record<string, string>; signal: AbortSignal },
     ];
     expect(url).toBe(
-      "http://127.0.0.1:19234/api/internal/project-sessions?limit=3&directory=%2Frepo%2Fa",
+      "http://127.0.0.1:19234/api/internal/project-sessions?limit=9&directory=%2Frepo%2Fa",
     );
     expect(init.headers["x-internal-token"]).toBe("tok");
     expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -302,6 +302,68 @@ describe("project_sessions · execute 完整路径（mock fetch）", () => {
     expect(text).toContain("共 1 条");
     expect(text).not.toContain("ses_chat_prod");
     expect(text).not.toContain("伴侣陪聊");
+  });
+
+  it("先多取后截断：limit=3 请求 limit=9，过滤后 5 条仍只展示 3 条并提示截断", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          sessions: [5, 4, 3, 2, 1].map((n) => ({
+            id: `ses_${n}`,
+            title: `会话${n}`,
+            directory: "/root/project/agent-mobile",
+            updatedAt: 1790845200000 + n * 1000,
+            agent: "build",
+          })),
+          truncated: false,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({ limit: 3 }, fakeToolContext());
+
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toBe("http://127.0.0.1:19234/api/internal/project-sessions?limit=9");
+
+    const text = String(result.content);
+    expect(text).toContain("共 3 条");
+    expect(text).toContain("ses_5");
+    expect(text).toContain("ses_3");
+    expect(text).not.toContain("ses_2");
+    expect(text).toContain("更早的会话已截断");
+  });
+
+  it("过滤后 2 条、limit=3、服务端未截断 → 展示 2 条且不提示截断", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            sessions: [
+              { id: "ses_chat", directory: "/root/project", agent: "companion", updatedAt: 1790845400000 },
+              { id: "ses_a", title: "A", directory: "/repo/a", updatedAt: 1790845300000 },
+              { id: "ses_b", title: "B", directory: "/repo/a", updatedAt: 1790845200000 },
+            ],
+            truncated: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const { tool } = await setup();
+
+    const result = await tool("project_sessions").execute({ limit: 3 }, fakeToolContext());
+
+    const text = String(result.content);
+    expect(text).toContain("共 2 条");
+    expect(text).toContain("ses_a");
+    expect(text).toContain("ses_b");
+    expect(text).not.toContain("已截断");
   });
 
   it("空结果 → 明确文案", async () => {
