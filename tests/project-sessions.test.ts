@@ -121,6 +121,41 @@ describe("parseProjectSessions（过滤 + 排序）", () => {
     expect(parseProjectSessions(response([]))).toEqual({ sessions: [], truncated: false });
   });
 
+  // issue #7：目录判据拦不住生产聊天会话（directory = /root/project），需按 agent 排除。
+  it("agent=companion → 剔除（即便目录不是伴侣大本营）", () => {
+    const parsed = parseProjectSessions(
+      response([
+        { id: "chat_prod", directory: "/root/project", agent: "companion", updatedAt: HOUR + 3_000 },
+        { id: "chat_home", directory: COMPANION_HOME_DIRECTORY, agent: "companion", updatedAt: HOUR + 2_000 },
+        { id: "proj", directory: "/root/project/agent-mobile", agent: "build", updatedAt: HOUR },
+      ]),
+    );
+
+    expect(parsed).not.toBeNull();
+    expect(parsed!.sessions.map((s) => s.id)).toEqual(["proj"]);
+  });
+
+  it("agent=build / general / plan 或缺失 → 保留；agent 值随解析结果透出", () => {
+    const parsed = parseProjectSessions(
+      response([
+        { id: "b", directory: "/repo/a", agent: "build", updatedAt: HOUR + 3_000 },
+        { id: "g", directory: "/repo/a", agent: "general", updatedAt: HOUR + 2_000 },
+        { id: "p", directory: "/repo/a", agent: "plan", updatedAt: HOUR + 1_000 },
+        { id: "none", directory: "/repo/a" },
+        { id: "empty", directory: "/repo/a", agent: "" },
+        { id: "num", directory: "/repo/a", agent: 42 },
+      ]),
+    );
+
+    expect(parsed).not.toBeNull();
+    expect(parsed!.sessions.map((s) => s.id)).toEqual(["b", "g", "p", "none", "empty", "num"]);
+    expect(parsed!.sessions[0]).toEqual({ id: "b", directory: "/repo/a", updatedAt: HOUR + 3_000, agent: "build" });
+    // 缺失 / 空串 / 非字符串 → 字段省略，不伪造
+    expect(parsed!.sessions[3]).toEqual({ id: "none", directory: "/repo/a" });
+    expect(parsed!.sessions[4]).toEqual({ id: "empty", directory: "/repo/a" });
+    expect(parsed!.sessions[5]).toEqual({ id: "num", directory: "/repo/a" });
+  });
+
   it("形状不合法 → null（调用方给明确文案，不抛）", () => {
     expect(parseProjectSessions(null)).toBeNull();
     expect(parseProjectSessions({})).toBeNull();
@@ -166,6 +201,15 @@ describe("formatProjectSessions", () => {
   it("缺 updatedAt → 明确写「未提供更新时间」", () => {
     const text = formatProjectSessions(response([{ id: "ses_x", directory: "/repo/a" }]));
     expect(text).toContain("未提供更新时间");
+  });
+
+  it("格式化不变：不展示 agent（有 agent 也还是 id · 标题 · 目录 · 时间）", () => {
+    const text = formatProjectSessions(
+      response([{ id: "ses_b", title: "修登录", directory: "/repo/a", updatedAt: HOUR, agent: "build" }]),
+    );
+
+    expect(text).toContain("ses_b · 修登录 · /repo/a · 2026-10-01 17:00");
+    expect(text).not.toContain("build");
   });
 });
 
