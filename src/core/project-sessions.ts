@@ -18,16 +18,18 @@
 //   updatedAt 是 **epoch 毫秒 number**（opencode session.time.updated），不是 ISO 字符串。
 //
 // 范围约束（**插件侧**执行，不依赖服务端）：只展示 **chatcode 侧**会话。
-//   ① 目录判据抄自 agent-mobile `agent-mobile-app/src/services/conversation-kind.ts` 的
-//   resolveConversationKind：directory 为空 / "/" / 伴侣大本营 → chat（伴侣聊天）侧；
-//   其余 → chatcode（项目）侧。常量值在此**抄写**，**不跨仓 import**（两仓独立发布）。
-//   ② agent 判据：`agent === "companion"` → chat 侧。**必要补充**——生产聊天会话的
-//   directory 是 `/root/project`（不是伴侣大本营），①拦不住。只排除 companion，
-//   `agent` 缺失（上游没给）时保持放行，避免误伤老会话/其它 agent（build / general / plan）。
+//   ① 目录判据：非空、非根，且归一化后**不在排除表里**（默认见 config.ts 的
+//   DEFAULT_EXCLUDED_DIRECTORIES = ["/root/project", "/root/project/homebase"]；
+//   配置 excludedDirectories 可整体替换）。`/root/project` 必须排除——App 建**聊天**
+//   会话传 directory:"/"，服务端落成自己的 cwd `/root/project`（issue #11）；工程会话在
+//   它的**子目录** `/root/project/<repo>`，精确匹配不会误伤。
+//   ② agent 判据：`agent === "companion"` → chat 侧。**第二道**——老聊天会话的 agent
+//   可能缺失，①已拦住；仅排除 companion，`agent` 缺失时保持放行（避免误伤 build / general / plan）。
 //   范围过滤只在插件侧；BFF 只做投影，不按 agent 过滤。
 //
 // 纪律：本模块只读，绝不构造写请求。
 
+import { DEFAULT_EXCLUDED_DIRECTORIES } from "./config.ts";
 import type { CompanionConfig } from "./config.ts";
 
 export const DEFAULT_LIMIT = 10;
@@ -80,11 +82,18 @@ export function normalizeDirectory(value: unknown): string {
   return trimmed.replace(/\/+$/, "");
 }
 
-/** chatcode 侧（项目）目录：非空、非根、非伴侣大本营 */
-export function isProjectDirectory(value: unknown): boolean {
+/**
+ * chatcode 侧（项目）目录：非空、非根、且归一化后**不在排除表里**（精确匹配，尾斜杠等价）。
+ * @param excluded 排除目录表；缺省用 DEFAULT_EXCLUDED_DIRECTORIES（含 `/root/project`
+ *   与伴侣大本营）。配置给了 excludedDirectories 时**整体替换**默认值。
+ */
+export function isProjectDirectory(
+  value: unknown,
+  excluded: readonly string[] = DEFAULT_EXCLUDED_DIRECTORIES,
+): boolean {
   const directory = normalizeDirectory(value);
   if (directory === "" || directory === "/") return false;
-  return directory !== normalizeDirectory(COMPANION_HOME_DIRECTORY);
+  return !excluded.some((entry) => normalizeDirectory(entry) === directory);
 }
 
 /** limit 校验（与服务端 400 口径一致）：缺省 10，1..20 的整数 */
@@ -165,16 +174,23 @@ function byUpdatedDesc(a: ProjectSession, b: ProjectSession): number {
 
 /**
  * 响应归一：抽 sessions、**剔除 chat 侧**、按更新时间倒序。
- * chat 侧判据 = 目录判据不成立 **或** agent 为 companion（后者补上 `/root/project` 的漏洞）。
+ * chat 侧判据 = 目录判据不成立（含 excluded 排除表）**或** agent 为 companion（第二道）。
  * 形状不合法（无 sessions 数组）→ null（调用方给明确文案，不抛）。
+ * @param excluded 排除目录表；缺省 DEFAULT_EXCLUDED_DIRECTORIES（配置可整体替换）。
  */
-export function parseProjectSessions(response: unknown): { readonly sessions: ProjectSession[]; readonly truncated: boolean } | null {
+export function parseProjectSessions(
+  response: unknown,
+  excluded: readonly string[] = DEFAULT_EXCLUDED_DIRECTORIES,
+): { readonly sessions: ProjectSession[]; readonly truncated: boolean } | null {
   const record = asRecord(response);
   if (!Array.isArray(record.sessions)) return null;
 
   const sessions = record.sessions
     .map(toProjectSession)
-    .filter((s): s is ProjectSession => s !== null && isProjectDirectory(s.directory) && s.agent !== COMPANION_AGENT_ID)
+    .filter(
+      (s): s is ProjectSession =>
+        s !== null && isProjectDirectory(s.directory, excluded) && s.agent !== COMPANION_AGENT_ID,
+    )
     .sort(byUpdatedDesc);
 
   return { sessions, truncated: record.truncated === true };
@@ -224,9 +240,14 @@ function formatSession(session: ProjectSession): string {
 /**
  * 响应 → 给模型读的简洁中文文本。**绝不抛**：形状再怪也退化成明确文案。
  * `limit` 是用户请求的条数（过滤后截断用；缺省 DEFAULT_LIMIT）。
+ * `excluded` 是排除目录表（缺省 DEFAULT_EXCLUDED_DIRECTORIES，配置可整体替换）。
  */
-export function formatProjectSessions(response: unknown, limit: number = DEFAULT_LIMIT): string {
-  const parsed = parseProjectSessions(response);
+export function formatProjectSessions(
+  response: unknown,
+  limit: number = DEFAULT_LIMIT,
+  excluded: readonly string[] = DEFAULT_EXCLUDED_DIRECTORIES,
+): string {
+  const parsed = parseProjectSessions(response, excluded);
   if (parsed === null) return "读取项目会话失败：服务端响应格式不符合预期。";
 
   const finalized = finalizeSessions(parsed.sessions, limit, parsed.truncated);
@@ -284,7 +305,7 @@ export function describeProjectSessionsParseFailure(): string {
 
 /** 显式 sessionId 命中 chat 侧 → 拒绝文案 */
 export function sessionChatScopeMessage(sessionID: string): string {
-  return `拒绝读取会话 ${sessionID}：它属于伴侣聊天（chat）侧（目录为空、根目录或伴侣大本营）。本工具只读 chatcode 侧项目会话；如需查看当前会话，请省略 sessionId。`;
+  return `拒绝读取会话 ${sessionID}：它属于伴侣聊天（chat）侧（目录为空、根目录，或落在排除目录表里，如 /root/project、伴侣大本营）。本工具只读 chatcode 侧项目会话；如需查看当前会话，请省略 sessionId。`;
 }
 
 /** 显式 sessionId 取不到目录 → 保守拒绝（无法判断范围就不放行） */

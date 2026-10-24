@@ -6,19 +6,32 @@ companion（agent-mobile 手机端）用的 **opencode v2 只读工具插件**�
 - `project_sessions` —— 经 BFF 内部端点列举 **chatcode 侧**项目会话（只读；伴侣聊天会话不展示）
 - `session_status` —— 进程内读会话/进程状态（`ctx.session.context` + `ctx.storage`）（施工卡：agent-mobile#61）；显式 `sessionId` 只允许 chatcode 侧
 
-> **当前状态：切片 3（本次 PR）**。在切片 2 的两个只读工具之上新增 `project_sessions`，
-> 并给 `session_status` 加范围约束（只读 chatcode 侧）。生产投放仍未做（见文末遗留）。
+> **当前状态：切片 3 已合 main；本次 PR 修 issue #11**（聊天会话目录 `/root/project` 未被排除，
+> 现将排除目录做成可配置项 `excludedDirectories`）。生产投放仍未做（见文末遗留）。
 > `assignment_history` / `project_sessions` 需要一份可选配置（见下），未配置时返回中文提示而非报错。
 
 ## 配置（可选）
 
-`assignment_history` 的 BFF 地址与 token 来自 `~/.config/opencode/companion-tools.json`（**文件可缺省**）：
+`assignment_history` / `project_sessions` 的 BFF 地址与 token 来自 `~/.config/opencode/companion-tools.json`（**文件可缺省**）：
 
 ```json
-{ "bffBase": "http://127.0.0.1:19234", "token": "<内部 token>" }
+{
+  "bffBase": "http://127.0.0.1:19234",
+  "token": "<内部 token>",
+  "excludedDirectories": ["/root/project", "/root/project/homebase"]
+}
 ```
 
+| 键 | 必填 | 说明 |
+|----|------|------|
+| `bffBase` | 是 | BFF 地址（只来自配置，代码里不写死生产地址） |
+| `token` | 是 | 内部只读 token（`x-internal-token`），由 homebase 侧投放 |
+| `excludedDirectories` | 否 | **视为「非项目会话」的目录表**，默认 `["/root/project", "/root/project/homebase"]`（`DEFAULT_EXCLUDED_DIRECTORIES`）。精确匹配、尾斜杠等价；配了它**整体替换**默认值（想让 `/root/project` 重新算项目会话就写别的表，写 `[]` 表示不排除任何目录） |
+
 - 缺文件 / 非法 JSON / 缺任一键 → 工具返回「未配置 BFF 地址或 token」中文提示，**不抛错**。
+- `excludedDirectories` **非法（非数组 / 含非字符串）时只忽略该字段**（走默认值），不会让整份配置失败。
+- 默认值是**生产机布局**（App 聊天会话落 `/root/project`，伴侣大本营是 `/root/project/homebase`）；
+  本机 / 别的部署若聊天会话落在别处，按实际目录改写这一项即可——不需要改代码。
 - 地址一律来自配置，代码里**不写死任何生产地址**（默认值是注释里的示例）。
 - 测试可用 `COMPANION_TOOLS_CONFIG` 覆盖配置路径。
 - token 由 homebase 侧投放（`INTERNAL_READ_TOKEN`，见 homebase OPERATIONS），本仓不持有。
@@ -39,14 +52,21 @@ companion（agent-mobile 手机端）用的 **opencode v2 只读工具插件**�
 伴侣聊天（chat）会话的判定与 agent-mobile `agent-mobile-app/src/services/conversation-kind.ts`
 的 `resolveConversationKind` 一致（常量值**抄写**在本仓 `src/core/project-sessions.ts`，**不跨仓 import**）：
 
-- `directory` 为空 / `"/"` / 伴侣大本营 `/root/project/homebase` → **chat 侧**（不展示、不读取）
-- 其余目录 → **chatcode 侧**（项目会话，可展示）
+- `directory` 为空 / `"/"` / **在排除目录表里**（默认 `/root/project` 与伴侣大本营 `/root/project/homebase`）→ **chat 侧**（不展示、不读取）
+- 其余目录 → **chatcode 侧**（项目会话，可展示）；`/root/project/<repo>` 这类**子目录**仍是项目侧（精确匹配，不做前缀判断）
+
+> **为什么必须排除 `/root/project`（issue #11）**：App 建**聊天**会话时传 `directory: "/"`，服务端把
+> 它落成自己的 cwd `/root/project`；工程会话在它的**子目录**里。只排除伴侣大本营的话，
+> `agent` 缺失的旧聊天会话会漏进「项目进展」（生产实测 20 条里 5 条是聊天）。排除表可用
+> 配置项 `excludedDirectories` 改写（见上），代码里不再写死。
 
 约束在**插件侧**兜底执行（服务端 `project-sessions` 端点本身不做 chat/project 区分）：
 
-- `project_sessions`：响应里即使混入 chat 侧会话也会被剔除；目录比较会先归一尾斜杠（`/repo/` ≡ `/repo`）。
+- `project_sessions`：响应里即使混入 chat 侧会话也会被剔除；目录比较会先归一尾斜杠（`/repo/` ≡ `/repo`）；
+  排除表取自配置（缺省 `DEFAULT_EXCLUDED_DIRECTORIES`）；`agent === "companion"` 的排除作为**第二道**判据保留。
 - `session_status`：**缺省（当前会话）放行**；显式 `sessionId` 时用 `ctx.session.get` 取目录——
   chat 侧 → 拒绝并说明原因；**目录取不到 → 保守拒绝**（无法判断范围就不放行）。
+  这里用**默认**排除表（不读配置）：读取会话状态不该因为缺配置而不可用。
 
 **分页顺序（issue #9）**：BFF 先按 `limit` 截断、插件后过滤，所以 `project_sessions` 请求时**多取**——
 `fetchLimit = min(20, max(limit * 3, limit))`（BFF 上限 20），拿到响应后先过滤 chat 侧，再截断到用户
@@ -105,7 +125,8 @@ pnpm test                # vitest（纯函数单测 + 工具接线集成 + 插�
 |------|------|------|
 | 1 | 仓骨架 + 安装/回滚 + 门禁（**不含任何工具**） | 已合 main |
 | 2 | 注册 `assignment_history` / `session_status`（含 BFF 内部端点对接 + 纯函数下沉） | 已合 main |
-| 3 | `project_sessions`（BFF `project-sessions` 端点对接）+ `session_status` 只读 chatcode 侧范围约束 | 本次 PR |
+| 3 | `project_sessions`（BFF `project-sessions` 端点对接）+ `session_status` 只读 chatcode 侧范围约束 | 已合 main |
+| 3.1 | 范围判据修正：排除 `/root/project`（聊天会话落点）+ 排除目录配置化 `excludedDirectories`（issue #11） | 本次 PR |
 | 4 | 生产安装（端点投放 + token + 工具白名单 + 重启窗口） | 待做 |
 
 首建 scaffold 直推 `main`；**之后的任何改动一律走 PR**（勿直推）。

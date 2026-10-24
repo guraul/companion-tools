@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { DEFAULT_EXCLUDED_DIRECTORIES } from "../src/core/config.ts";
 import {
   COMPANION_HOME_DIRECTORY,
   buildProjectSessionsUrl,
@@ -47,6 +48,30 @@ describe("isProjectDirectory（chatcode 侧判据）", () => {
     expect(isProjectDirectory(COMPANION_HOME_DIRECTORY)).toBe(false);
     expect(isProjectDirectory(`${COMPANION_HOME_DIRECTORY}/`)).toBe(false);
     expect(isProjectDirectory(` ${COMPANION_HOME_DIRECTORY}/ `)).toBe(false);
+  });
+
+  // issue #11：生产聊天会话的 directory 是 /root/project（App 传 "/" → 服务端落成 cwd）。
+  it("/root/project 本身（含尾斜杠/空白）→ chat 侧；子目录仍是项目侧", () => {
+    expect(isProjectDirectory("/root/project")).toBe(false);
+    expect(isProjectDirectory("/root/project/")).toBe(false);
+    expect(isProjectDirectory(" /root/project/ ")).toBe(false);
+    expect(isProjectDirectory("/root/project/agent-mobile")).toBe(true);
+    expect(isProjectDirectory("/root/project/agent-mobile/")).toBe(true);
+  });
+
+  it("默认排除表包含 /root/project 与伴侣大本营", () => {
+    expect(DEFAULT_EXCLUDED_DIRECTORIES).toContain("/root/project");
+    expect(DEFAULT_EXCLUDED_DIRECTORIES).toContain(COMPANION_HOME_DIRECTORY);
+  });
+
+  it("自定义 excluded → 整体替换默认值（精确匹配、尾斜杠等价）", () => {
+    const excluded = ["/tmp/x"];
+    expect(isProjectDirectory("/tmp/x", excluded)).toBe(false);
+    expect(isProjectDirectory("/tmp/x/", excluded)).toBe(false);
+    expect(isProjectDirectory("/tmp/x/y", excluded)).toBe(true);
+    // 覆盖默认：默认里的 /root/project 在自定义表下重新被视为项目侧
+    expect(isProjectDirectory("/root/project", excluded)).toBe(true);
+    expect(isProjectDirectory("/root/project", [])).toBe(true);
   });
 });
 
@@ -176,6 +201,48 @@ describe("parseProjectSessions（过滤 + 排序）", () => {
     expect(parsed!.sessions.map((s) => s.id)).toEqual(["proj"]);
   });
 
+  // issue #11：老聊天会话 agent 缺失，只能靠目录判据拦住 /root/project。
+  it("agent 缺失 + /root/project（含尾斜杠）→ 剔除；子目录保留", () => {
+    const parsed = parseProjectSessions(
+      response([
+        { id: "chat_old", title: "简单确认回复", directory: "/root/project", updatedAt: HOUR + 4_000 },
+        { id: "chat_old_slash", title: "要求仅回复ok", directory: "/root/project/", updatedAt: HOUR + 3_500 },
+        { id: "proj", title: "修登录", directory: "/root/project/agent-mobile", updatedAt: HOUR },
+      ]),
+    );
+
+    expect(parsed).not.toBeNull();
+    expect(parsed!.sessions.map((s) => s.id)).toEqual(["proj"]);
+  });
+
+  // issue #11：配置 excludedDirectories 生效且**整体替换**默认值。
+  it("自定义 excluded：/tmp/x 剔除、/root/project 反而保留", () => {
+    const parsed = parseProjectSessions(
+      response([
+        { id: "chat_tmp", directory: "/tmp/x", updatedAt: HOUR + 2_000 },
+        { id: "proj_root", directory: "/root/project", updatedAt: HOUR + 1_000 },
+        { id: "proj_sub", directory: "/tmp/x/y", updatedAt: HOUR },
+      ]),
+      ["/tmp/x"],
+    );
+
+    expect(parsed).not.toBeNull();
+    expect(parsed!.sessions.map((s) => s.id)).toEqual(["proj_root", "proj_sub"]);
+  });
+
+  it("空排除表 → 只保留「非空、非根」判据", () => {
+    const parsed = parseProjectSessions(
+      response([
+        { id: "chat_root", directory: "/" },
+        { id: "proj_root", directory: "/root/project", updatedAt: HOUR },
+        { id: "chat_empty", directory: "" },
+      ]),
+      [],
+    );
+
+    expect(parsed!.sessions.map((s) => s.id)).toEqual(["proj_root"]);
+  });
+
   it("agent=build / general / plan 或缺失 → 保留；agent 值随解析结果透出", () => {
     const parsed = parseProjectSessions(
       response([
@@ -274,6 +341,22 @@ describe("formatProjectSessions", () => {
 
   it("形状不合法 → 明确失败文案（绝不抛）", () => {
     expect(formatProjectSessions(null)).toContain("响应格式不符合预期");
+  });
+
+  // issue #11：excluded 由调用方（宿主按配置）透传。
+  it("排除表透传：默认剔除 /root/project，自定义后保留", () => {
+    const payload = response([
+      { id: "ses_chat", title: "旧聊天", directory: "/root/project", updatedAt: HOUR + 1_000 },
+      { id: "ses_proj", title: "修登录", directory: "/root/project/agent-mobile", updatedAt: HOUR },
+    ]);
+
+    const withDefault = formatProjectSessions(payload);
+    expect(withDefault).toContain("共 1 条");
+    expect(withDefault).not.toContain("ses_chat");
+
+    const withCustom = formatProjectSessions(payload, 10, ["/tmp/x"]);
+    expect(withCustom).toContain("共 2 条");
+    expect(withCustom).toContain("ses_chat");
   });
 
   it("缺 updatedAt → 明确写「未提供更新时间」", () => {

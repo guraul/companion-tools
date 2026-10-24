@@ -152,7 +152,7 @@ export default Plugin.define({
         editor.add({
           name: "project_sessions",
           description:
-            "列出 chatcode 侧（绑定真实项目目录）的会话，按最近更新倒序（只读）。可给出 projectPath 只看某个项目；伴侣聊天会话（agent 为 companion，或目录为空、根目录、伴侣大本营）一律不展示。经 BFF 内部只读端点查询。",
+            "列出 chatcode 侧（绑定真实项目目录）的会话，按最近更新倒序（只读）。可给出 projectPath 只看某个项目；伴侣聊天会话（agent 为 companion，或目录为空、根目录、排除目录表里的目录——如 /root/project、伴侣大本营）一律不展示。经 BFF 内部只读端点查询。",
           input: {
             type: "object",
             properties: {
@@ -197,7 +197,14 @@ export default Plugin.define({
               }
               // 范围约束 + 分页顺序（issue #9）：URL 里按 resolveFetchLimit 多取，
               // formatProjectSessions 内部再过滤 chat 侧并截断到用户请求的 limit。
-              return { content: formatProjectSessions(parsed, validation.query.limit) };
+              // 排除目录表取自配置（缺省走 DEFAULT_EXCLUDED_DIRECTORIES，issue #11）。
+              return {
+                content: formatProjectSessions(
+                  parsed,
+                  validation.query.limit,
+                  configResult.config.excludedDirectories,
+                ),
+              };
             } catch (error) {
               return { content: describeProjectSessionsNetworkFailure(error) };
             }
