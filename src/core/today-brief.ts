@@ -9,10 +9,11 @@
 //   resp:   { openAttention:{count,top:[{id,title,summary,createdAt}]},
 //             executions:{count,matched,failed},
 //             calendar:{count,first:[{time,summary}]},
+//             meetings:{count,items:[{at,responsibility}]},
 //             retryReports:[{text,createdAt}],
 //             generatedAt }
 //   服务端：env 未配 / 缺头 / 错值 → 401；无数据 → 200 + 0 / 空数组（不是 404）。
-//   时间字段 createdAt / generatedAt 是 **epoch 毫秒 number**（不是 ISO 字符串）。
+//   时间字段 createdAt / generatedAt / meetings[].at 是 **epoch 毫秒 number**（不是 ISO 字符串）。
 //
 // 输出是给模型读的**短文本**：≤ MAX_LINES 行，一节一行；任何字段里的换行/长文本都被压平，
 // 保证行数上限不受上游脏数据影响。全空 →「今天没有待处理的事。」
@@ -29,6 +30,8 @@ const MAX_ITEM_CHARS = 40;
 const MAX_ATTENTION_ITEMS = 3;
 /** 「日程」最多展开几条 */
 const MAX_CALENDAR_ITEMS = 3;
+/** 「今天的会议」最多展开几条（超出只加省略号，不报剩余条数——一行要短） */
+const MAX_MEETING_ITEMS = 3;
 /** 「补跑报告」最多展开几条 */
 const MAX_RETRY_ITEMS = 2;
 
@@ -89,7 +92,7 @@ function joinItems(items: string[], total: number): string {
 
 /**
  * 响应 → 给模型读的简短中文文本（≤8 行）。**绝不抛**：形状再怪也退化成明确文案。
- * 空数据（未处理 0 / 执行 0 / 日程 0 / 补跑 0）→「今天没有待处理的事。」
+ * 空数据（未处理 0 / 执行 0 / 日程 0 / 会议 0 / 补跑 0）→「今天没有待处理的事。」
  */
 export function formatTodayBrief(response: unknown): string {
   const record = asRecord(response);
@@ -108,10 +111,18 @@ export function formatTodayBrief(response: unknown): string {
   const calendarFirst = asArray(calendar.first);
   const calendarCount = pickCount(calendar, "count", calendarFirst.length);
 
+  const meetings = asRecord(record.meetings);
+  const meetingItems = asArray(meetings.items);
+  const meetingCount = pickCount(meetings, "count", meetingItems.length);
+
   const retryReports = asArray(record.retryReports);
 
   const nothingToDo =
-    attentionCount === 0 && executionCount === 0 && calendarCount === 0 && retryReports.length === 0;
+    attentionCount === 0 &&
+    executionCount === 0 &&
+    calendarCount === 0 &&
+    meetingCount === 0 &&
+    retryReports.length === 0;
   if (nothingToDo) return NOTHING_TODAY;
 
   const lines: string[] = [
@@ -138,6 +149,19 @@ export function formatTodayBrief(response: unknown): string {
       return time !== undefined ? `${time} ${summary}` : summary;
     });
     lines.push(`日程：${joinItems(items, Math.max(calendarCount, calendarFirst.length))}`);
+  }
+
+  // 「今天的会议」= 自己记下的 one-shot 责任（与 ICS 日程并列，来源不同故不合并不换词）。
+  // 形式：今天的会议：10:00 和设计评审、15:30 周会；超过 3 条只加「…」，不占更多行。
+  if (meetingItems.length > 0) {
+    const items = meetingItems.slice(0, MAX_MEETING_ITEMS).map((entry) => {
+      const item = asRecord(entry);
+      const time = shortTime(item.at, generatedAt);
+      const responsibility = flat(pickString(item, "responsibility") ?? "（无标题）");
+      return time !== "" ? `${time} ${responsibility}` : responsibility;
+    });
+    const rest = Math.max(meetingCount, meetingItems.length) - items.length;
+    lines.push(`今天的会议：${items.join("、")}${rest > 0 ? "…" : ""}`);
   }
 
   if (retryReports.length > 0) {

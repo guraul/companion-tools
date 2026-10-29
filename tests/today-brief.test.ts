@@ -30,6 +30,13 @@ function fullBrief() {
         { time: "14:00", summary: "体检" },
       ],
     },
+    meetings: {
+      count: 2,
+      items: [
+        { at: 1790820000000, responsibility: "和设计评审" },
+        { at: 1790839800000, responsibility: "周会" },
+      ],
+    },
     retryReports: [{ text: "昨天 3 条失败已重试，2 条成功", createdAt: 1790841600000 }],
     generatedAt: GENERATED_AT,
   };
@@ -44,7 +51,7 @@ describe("buildTodayBriefUrl", () => {
 });
 
 describe("formatTodayBrief · 有数据", () => {
-  it("四个部分都出现：未处理 / 执行摘要 / 日程 / 补跑报告", () => {
+  it("五个部分都出现：未处理 / 执行摘要 / 日程 / 会议 / 补跑报告", () => {
     const text = formatTodayBrief(fullBrief());
 
     expect(text).toContain("未处理 2 件");
@@ -98,6 +105,85 @@ describe("formatTodayBrief · 有数据", () => {
 
     expect(text).toContain("未处理 5 件");
     expect(text).toContain("（另有 3 条未列出）");
+  });
+});
+
+describe("formatTodayBrief · 会议（meetings）", () => {
+  it("有会议 → 单列一行「今天的会议：HH:mm 名称、HH:mm 名称」", () => {
+    const text = formatTodayBrief(fullBrief());
+    const lines = text.split("\n");
+
+    expect(text).toContain("今天的会议：10:00 和设计评审、15:30 周会");
+    // 会议自成一行（不与日程/补跑挤在一起）
+    expect(lines.filter((line) => line.startsWith("今天的会议："))).toHaveLength(1);
+  });
+
+  it("无会议（缺字段 / 空数组）→ 不出现「今天的会议」这一行，首行结构不变", () => {
+    const brief = fullBrief();
+    const withoutField = { ...brief } as Record<string, unknown>;
+    delete withoutField.meetings;
+    const withMeetings = formatTodayBrief(brief).split("\n")[0];
+
+    for (const response of [withoutField, { ...brief, meetings: { count: 0, items: [] } }]) {
+      const text = formatTodayBrief(response);
+      expect(text).not.toContain("今天的会议");
+      // 首行与「有会议」时完全一致：概览不新增「会议 N 项」
+      expect(text.split("\n")[0]).toBe(withMeetings);
+    }
+  });
+
+  it("超过 3 条 → 只展开 3 条并以「…」结尾", () => {
+    const text = formatTodayBrief({
+      openAttention: { count: 0, top: [] },
+      executions: { count: 0, matched: 0, failed: 0 },
+      calendar: { count: 0, first: [] },
+      meetings: {
+        count: 5,
+        items: [
+          { at: 1790820000000, responsibility: "和设计评审" },
+          { at: 1790839800000, responsibility: "周会" },
+          { at: 1790856000000, responsibility: "一对一" },
+          { at: 1790863200000, responsibility: "复盘" },
+          { at: 1790870400000, responsibility: "客户沟通" },
+        ],
+      },
+      retryReports: [],
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text).toContain("今天的会议：10:00 和设计评审、15:30 周会、20:00 一对一…");
+    expect(text).not.toContain("复盘");
+    expect(text).not.toContain("客户沟通");
+    expect(text.split("\n")).toHaveLength(2);
+  });
+
+  it("只有会议（别的都为 0）→ 不算空，照样输出概览 + 会议行", () => {
+    const text = formatTodayBrief({
+      openAttention: { count: 0, top: [] },
+      executions: { count: 0, matched: 0, failed: 0 },
+      calendar: { count: 0, first: [] },
+      meetings: { count: 1, items: [{ at: 1790820000000, responsibility: "和设计评审" }] },
+      retryReports: [],
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text).not.toBe(NOTHING_TODAY);
+    expect(text.split("\n")[0]).toContain("今天概览：");
+    expect(text).toContain("今天的会议：10:00 和设计评审");
+  });
+
+  it("会议名里的换行 / 超长被压平，行数仍不破上限", () => {
+    const text = formatTodayBrief({
+      openAttention: { count: 0, top: [] },
+      executions: { count: 0, matched: 0, failed: 0 },
+      calendar: { count: 0, first: [] },
+      meetings: { count: 1, items: [{ at: 1790820000000, responsibility: "和设计评审\n第二行" }] },
+      retryReports: [],
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text).not.toContain("\n第二行");
+    expect(text.split("\n").length).toBeLessThanOrEqual(MAX_LINES);
   });
 });
 
