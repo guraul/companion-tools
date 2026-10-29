@@ -560,6 +560,7 @@ describe("today_brief · execute 完整路径（mock fetch）", () => {
           },
           executions: { count: 3, matched: 2, failed: 1 },
           calendar: { count: 1, first: [{ time: "09:00", summary: "周会" }] },
+          meetings: { count: 1, items: [{ at: 1790820000000, responsibility: "和设计评审" }] },
           retryReports: [{ text: "2 条失败已重试", createdAt: 1790841600000 }],
           generatedAt: 1790845200000,
         }),
@@ -585,6 +586,7 @@ describe("today_brief · execute 完整路径（mock fetch）", () => {
     expect(text).toContain("执行 3 次（命中 2 / 失败 1）");
     expect(text).toContain("交房租");
     expect(text).toContain("09:00 周会");
+    expect(text).toContain("今天的会议：10:00 和设计评审");
     expect(text).toContain("2 条失败已重试");
     expect(text.split("\n").length).toBeLessThanOrEqual(8);
   });

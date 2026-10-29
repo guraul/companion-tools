@@ -221,7 +221,7 @@ export default Plugin.define({
 
         editor.add({
           name: "today_brief",
-          description: "拿到今天的全貌：未处理事项、执行摘要、日历、补跑报告",
+          description: "拿到今天的全貌：未处理事项、执行摘要、日历、会议、补跑报告",
           input: {
             type: "object",
             properties: {},

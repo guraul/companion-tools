@@ -4,7 +4,7 @@ companion（agent-mobile 手机端）用的 **opencode v2 只读工具插件**�
 
 - `assignment_history` —— 经 BFF 新增内部端点读取 companion 责任（assignment）历史（施工卡：agent-mobile#60 DoD3）
 - `project_sessions` —— 经 BFF 内部端点列举 **chatcode 侧**项目会话（只读；伴侣聊天会话不展示）
-- `today_brief` —— 经 BFF 内部聚合端点拿「今天」的全貌（未处理事项 / 执行摘要 / 日历 / 补跑报告），压成 ≤8 行短文本
+- `today_brief` —— 经 BFF 内部聚合端点拿「今天」的全貌（未处理事项 / 执行摘要 / 日历 / 会议 / 补跑报告），压成 ≤8 行短文本
 - `session_status` —— 进程内读会话/进程状态（`ctx.session.context` + `ctx.storage`）（施工卡：agent-mobile#61）；显式 `sessionId` 只允许 chatcode 侧
 
 > **当前状态：切片 3.2 已合 main（`today_brief`，Ref #153）**。
@@ -43,7 +43,7 @@ companion（agent-mobile 手机端）用的 **opencode v2 只读工具插件**�
 |------|------|----------|
 | `assignment_history` | 责任（assignment）历史执行记录；responsibility 模糊 / assignmentId 精确 | HTTP 调 homebase `GET /api/internal/assignment-history`（x-internal-token） |
 | `project_sessions` | chatcode 侧项目会话列表（id · 标题 · 目录 · 更新时间，最近更新在前）；`projectPath` 可选过滤 | HTTP 调 homebase `GET /api/internal/project-sessions`（x-internal-token） |
-| `today_brief` | 今天的全貌：未处理事项（open Attention）、执行摘要（assignment-runtime 计数）、日历（今天剩余日程）、补跑报告（未过期 retry-report）；压成 ≤8 行短文本 | HTTP 调 homebase `GET /api/internal/today-brief`（x-internal-token） |
+| `today_brief` | 今天的全貌：未处理事项（open Attention）、执行摘要（assignment-runtime 计数）、日历（今天剩余日程）、会议（今天剩下的 one-shot 责任）、补跑报告（未过期 retry-report）；压成 ≤8 行短文本 | HTTP 调 homebase `GET /api/internal/today-brief`（x-internal-token） |
 | `session_status` | 会话标题、目录、消息数、最近几条 user/assistant 文本摘要 | 进程内 `ctx.session.context` + `ctx.session.get` |
 
 四个工具都声明 `options: { codemode: false }`：本机 companion 白名单没有 `execute` 的 allow，
@@ -129,7 +129,7 @@ pnpm test                # vitest（纯函数单测 + 工具接线集成 + 插�
 | 2 | 注册 `assignment_history` / `session_status`（含 BFF 内部端点对接 + 纯函数下沉） | 已合 main |
 | 3 | `project_sessions`（BFF `project-sessions` 端点对接）+ `session_status` 只读 chatcode 侧范围约束 | 已合 main |
 | 3.1 | 范围判据修正：排除 `/root/project`（聊天会话落点）+ 排除目录配置化 `excludedDirectories`（issue #11） | 已合 main |
-| 3.2 | `today_brief`（BFF `today-brief` 聚合端点对接；四段压成 ≤8 行，全空明说「今天没有待处理的事」） | 本次 PR（Ref #153） |
+| 3.2 | `today_brief`（BFF `today-brief` 聚合端点对接；五段压成 ≤8 行，全空明说「今天没有待处理的事」） | 本次 PR（Ref #153） |
 | 4 | 生产安装（端点投放 + token + 工具白名单 + 重启窗口） | 待做 |
 
 首建 scaffold 直推 `main`；**之后的任何改动一律走 PR**（勿直推）。
