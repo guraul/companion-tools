@@ -537,11 +537,115 @@ describe("session_status · 范围约束（只读 chatcode 侧）", () => {
   });
 });
 
+describe("today_brief · execute 完整路径（mock fetch）", () => {
+  it("无配置 → 未配置中文提示，且不发请求", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { tool } = await setup();
+
+    const result = await tool("today_brief").execute({}, fakeToolContext());
+
+    expect(String(result.content)).toContain("未配置 BFF 地址或 token");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("成功 → URL/鉴权头正确，响应压成中文短文", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234/", token: "tok" }));
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          openAttention: {
+            count: 1,
+            top: [{ id: "att_1", title: "交房租", summary: "本月 5 号到期", createdAt: 1790841600000 }],
+          },
+          executions: { count: 3, matched: 2, failed: 1 },
+          calendar: { count: 1, first: [{ time: "09:00", summary: "周会" }] },
+          retryReports: [{ text: "2 条失败已重试", createdAt: 1790841600000 }],
+          generatedAt: 1790845200000,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { tool } = await setup();
+
+    const result = await tool("today_brief").execute({}, fakeToolContext());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      { headers: Record<string, string>; signal: AbortSignal },
+    ];
+    expect(url).toBe("http://127.0.0.1:19234/api/internal/today-brief");
+    expect(init.headers["x-internal-token"]).toBe("tok");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+
+    const text = String(result.content);
+    expect(text).toContain("未处理 1 件");
+    expect(text).toContain("执行 3 次（命中 2 / 失败 1）");
+    expect(text).toContain("交房租");
+    expect(text).toContain("09:00 周会");
+    expect(text).toContain("2 条失败已重试");
+    expect(text.split("\n").length).toBeLessThanOrEqual(8);
+  });
+
+  it("端点 401 → 中文 token 提示，绝不抛", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "wrong" }));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response('{"error":"unauthorized"}', { status: 401 })));
+    const { tool } = await setup();
+
+    const result = await tool("today_brief").execute({}, fakeToolContext());
+
+    expect(String(result.content)).toContain("401");
+    expect(String(result.content)).toContain("token 未配置或值不正确");
+  });
+
+  it("全空响应 → 明说今天没有待处理的事", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            openAttention: { count: 0, top: [] },
+            executions: { count: 0, matched: 0, failed: 0 },
+            calendar: { count: 0, first: [] },
+            retryReports: [],
+            generatedAt: 1790845200000,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const { tool } = await setup();
+
+    const result = await tool("today_brief").execute({}, fakeToolContext());
+
+    expect(String(result.content)).toBe("今天没有待处理的事。");
+  });
+
+  it("网络错 → 中文提示，绝不抛", async () => {
+    writeFileSync(configPath, JSON.stringify({ bffBase: "http://127.0.0.1:19234", token: "tok" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    const { tool } = await setup();
+
+    const result = await tool("today_brief").execute({}, fakeToolContext());
+
+    expect(String(result.content)).toContain("无法连接 BFF");
+  });
+});
+
 describe("codemode:false 存在性（否则本机白名单下工具彻底不可达）", () => {
-  it("三个工具都声明了 options.codemode === false", async () => {
+  it("四个工具都声明了 options.codemode === false", async () => {
     const { host } = await setup();
     expect(host.tools.get("assignment_history")?.options).toEqual({ codemode: false });
     expect(host.tools.get("project_sessions")?.options).toEqual({ codemode: false });
+    expect(host.tools.get("today_brief")?.options).toEqual({ codemode: false });
     expect(host.tools.get("session_status")?.options).toEqual({ codemode: false });
   });
 });

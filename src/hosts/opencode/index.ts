@@ -1,8 +1,9 @@
 // companion-tools · opencode v2 插件壳
 //
-// 注册三个**只读**工具：
+// 注册四个**只读**工具：
 //   - assignment_history  → 经 HTTP 调 homebase 内部只读端点（跨进程，token 鉴权）
 //   - project_sessions    → 经 HTTP 调 homebase 内部只读端点；插件侧再过滤为 chatcode 侧
+//   - today_brief         → 经 HTTP 调 homebase 内部只读聚合端点（今日全貌，压成 ≤8 行短文本）
 //   - session_status      → 进程内 ctx.session.context + ctx.session.get
 //                           显式 sessionId 只允许 chatcode 侧；目录不可得 → 保守拒绝。
 //
@@ -26,6 +27,13 @@ import {
   requestSignal,
   validateQuery,
 } from "../../core/assignment-history.ts";
+import {
+  buildTodayBriefUrl,
+  describeTodayBriefHttpFailure,
+  describeTodayBriefNetworkFailure,
+  describeTodayBriefParseFailure,
+  formatTodayBrief,
+} from "../../core/today-brief.ts";
 import { buildSessionStatus, sessionUnavailableMessage } from "../../core/session-status.ts";
 import {
   buildProjectSessionsUrl,
@@ -207,6 +215,43 @@ export default Plugin.define({
               };
             } catch (error) {
               return { content: describeProjectSessionsNetworkFailure(error) };
+            }
+          },
+        });
+
+        editor.add({
+          name: "today_brief",
+          description: "拿到今天的全貌：未处理事项、执行摘要、日历、补跑报告",
+          input: {
+            type: "object",
+            properties: {},
+            required: [],
+          },
+          options: { codemode: false },
+          async execute(_args, toolCtx) {
+            try {
+              const configResult = parseConfig(readConfigText());
+              if (!configResult.ok) return { content: configResult.message };
+
+              const url = buildTodayBriefUrl(configResult.config);
+              const response = await fetch(url, {
+                method: "GET",
+                headers: { "x-internal-token": configResult.config.token },
+                signal: requestSignal(toolCtx.signal),
+              });
+
+              const body = await response.text();
+              if (!response.ok) return { content: describeTodayBriefHttpFailure(response.status, body) };
+
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(body);
+              } catch {
+                return { content: describeTodayBriefParseFailure() };
+              }
+              return { content: formatTodayBrief(parsed) };
+            } catch (error) {
+              return { content: describeTodayBriefNetworkFailure(error) };
             }
           },
         });
