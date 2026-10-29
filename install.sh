@@ -18,6 +18,8 @@ set -euo pipefail
 
 REPO_PATH="${1:-$HOME/workspace/companion-tools}"
 OCP_CONFIG_DIR="$HOME/.config/opencode"
+# 远端一律走 SSH：生产服务器用 https 拉取会报 `GnuTLS recv error (-110)`（2026-10-29）。
+REPO_URL="git@github.com:guraul/companion-tools.git"
 
 echo "=== companion-tools installer ==="
 echo "Repo path: $REPO_PATH"
@@ -29,12 +31,30 @@ if [ "${COMPANION_TOOLS_SKIP_SYNC:-0}" = "1" ]; then
   echo "[1/4] Skipping repo sync (COMPANION_TOOLS_SKIP_SYNC=1)"
 elif [ -d "$REPO_PATH/.git" ]; then
   echo "[1/4] Repo exists, pulling latest..."
-  git -C "$REPO_PATH" pull --ff-only
+  # 老检出可能还是 https 远端：就地改写成 SSH（幂等，已是 SSH 则跳过）。
+  current_url="$(git -C "$REPO_PATH" remote get-url origin 2>/dev/null || true)"
+  if [ "$current_url" != "$REPO_URL" ]; then
+    echo "  -> rewriting origin: ${current_url:-<missing>} -> $REPO_URL"
+    if ! git -C "$REPO_PATH" remote set-url origin "$REPO_URL"; then
+      echo "  !! failed to rewrite origin of $REPO_PATH to $REPO_URL" >&2
+      echo "     Fix by hand: git -C $REPO_PATH remote set-url origin $REPO_URL" >&2
+      exit 1
+    fi
+  fi
+  if ! git -C "$REPO_PATH" pull --ff-only; then
+    echo "  !! git pull --ff-only failed in $REPO_PATH (remote: $REPO_URL)" >&2
+    echo "     Check SSH access: ssh -T git@github.com" >&2
+    exit 1
+  fi
 else
   echo "[1/4] Cloning repo..."
   # 父目录必须先建出来：默认值在 ~/workspace/ 下，干净机器上这个母目录不一定存在。
   mkdir -p "$(dirname "$REPO_PATH")"
-  git clone https://github.com/guraul/companion-tools.git "$REPO_PATH"
+  if ! git clone "$REPO_URL" "$REPO_PATH"; then
+    echo "  !! git clone failed: $REPO_URL -> $REPO_PATH" >&2
+    echo "     Check SSH access: ssh -T git@github.com" >&2
+    exit 1
+  fi
 fi
 echo ""
 
