@@ -34,6 +34,15 @@ import {
   describeTodayBriefParseFailure,
   formatTodayBrief,
 } from "../../core/today-brief.ts";
+import {
+  buildOpenThreadsUrl,
+  formatOpenThreads,
+  formatOpenedThread,
+  formatClosedThread,
+  describeOpenThreadHttpFailure,
+  describeOpenThreadNetworkFailure,
+  describeOpenThreadParseFailure,
+} from "../../core/open-threads.ts";
 import { buildSessionStatus, sessionUnavailableMessage } from "../../core/session-status.ts";
 import {
   buildProjectSessionsUrl,
@@ -252,6 +261,102 @@ export default Plugin.define({
               return { content: formatTodayBrief(parsed) };
             } catch (error) {
               return { content: describeTodayBriefNetworkFailure(error) };
+            }
+          },
+        });
+
+        editor.add({
+          name: "thread_list",
+          description: "列出未收口的续接标记（聊到一半没结论、值得回头继续的话题）",
+          input: { type: "object", properties: {}, required: [] },
+          options: { codemode: false },
+          async execute(_args, toolCtx) {
+            try {
+              const configResult = parseConfig(readConfigText());
+              if (!configResult.ok) return { content: configResult.message };
+              const response = await fetch(buildOpenThreadsUrl(configResult.config), {
+                method: "GET",
+                headers: { "x-internal-token": configResult.config.token },
+                signal: requestSignal(toolCtx.signal),
+              });
+              const body = await response.text();
+              if (!response.ok) return { content: describeOpenThreadHttpFailure(response.status, body) };
+              let parsed: unknown;
+              try { parsed = JSON.parse(body); } catch { return { content: describeOpenThreadParseFailure() }; }
+              return { content: formatOpenThreads(parsed) };
+            } catch (error) {
+              return { content: describeOpenThreadNetworkFailure(error) };
+            }
+          },
+        });
+
+        editor.add({
+          name: "thread_open",
+          description: "把当前这轮对话标记为「值得回头继续」，并写下为什么（一个会话最多一条）",
+          input: {
+            type: "object",
+            properties: { reason: { type: "string", description: "为什么值得回头继续（一句话）" } },
+            required: ["reason"],
+          },
+          options: { codemode: false },
+          async execute(args, toolCtx) {
+            try {
+              const configResult = parseConfig(readConfigText());
+              if (!configResult.ok) return { content: configResult.message };
+              const response = await fetch(buildOpenThreadsUrl(configResult.config), {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-internal-token": configResult.config.token },
+                body: JSON.stringify({
+                  action: "open",
+                  sessionId: toolCtx.sessionID,
+                  reason: String((args as { reason?: unknown })?.reason ?? ""),
+                }),
+                signal: requestSignal(toolCtx.signal),
+              });
+              const body = await response.text();
+              if (!response.ok) return { content: describeOpenThreadHttpFailure(response.status, body) };
+              let parsed: unknown;
+              try { parsed = JSON.parse(body); } catch { return { content: describeOpenThreadParseFailure() }; }
+              return { content: formatOpenedThread(parsed) };
+            } catch (error) {
+              return { content: describeOpenThreadNetworkFailure(error) };
+            }
+          },
+        });
+
+        editor.add({
+          name: "thread_close",
+          description: "收口一条续接标记（这件事已经了结，不用再回头）",
+          input: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "thread_list 给出的 id" },
+              reason: { type: "string", description: "为什么收口（可选）" },
+            },
+            required: ["id"],
+          },
+          options: { codemode: false },
+          async execute(args, toolCtx) {
+            try {
+              const configResult = parseConfig(readConfigText());
+              if (!configResult.ok) return { content: configResult.message };
+              const response = await fetch(buildOpenThreadsUrl(configResult.config), {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-internal-token": configResult.config.token },
+                body: JSON.stringify({
+                  action: "close",
+                  id: String((args as { id?: unknown })?.id ?? ""),
+                  reason: (args as { reason?: unknown })?.reason,
+                }),
+                signal: requestSignal(toolCtx.signal),
+              });
+              const body = await response.text();
+              if (!response.ok) return { content: describeOpenThreadHttpFailure(response.status, body) };
+              let parsed: unknown;
+              try { parsed = JSON.parse(body); } catch { return { content: describeOpenThreadParseFailure() }; }
+              return { content: formatClosedThread(parsed) };
+            } catch (error) {
+              return { content: describeOpenThreadNetworkFailure(error) };
             }
           },
         });
