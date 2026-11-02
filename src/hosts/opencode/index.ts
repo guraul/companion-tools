@@ -43,6 +43,14 @@ import {
   describeOpenThreadNetworkFailure,
   describeOpenThreadParseFailure,
 } from "../../core/open-threads.ts";
+import {
+  buildRawIdeaUrl,
+  buildKbSearchUrl,
+  formatSavedIdea,
+  formatKbHits,
+  describeIdeaHttpFailure,
+  describeIdeaNetworkFailure,
+} from "../../core/ideas.ts";
 import { buildSessionStatus, sessionUnavailableMessage } from "../../core/session-status.ts";
 import {
   buildProjectSessionsUrl,
@@ -357,6 +365,75 @@ export default Plugin.define({
               return { content: formatClosedThread(parsed) };
             } catch (error) {
               return { content: describeOpenThreadNetworkFailure(error) };
+            }
+          },
+        });
+
+        editor.add({
+          name: "idea_save",
+          description: "把用户随口一提、暂时不需要做的想法存进知识库（不建提醒、不建任务）",
+          input: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "想法的简短标题" },
+              content: { type: "string", description: "想法原文或一句话描述" },
+            },
+            required: ["title", "content"],
+          },
+          options: { codemode: false },
+          async execute(args, toolCtx) {
+            try {
+              const configResult = parseConfig(readConfigText());
+              if (!configResult.ok) return { content: configResult.message };
+              const response = await fetch(buildRawIdeaUrl(configResult.config), {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-internal-token": configResult.config.token },
+                body: JSON.stringify({
+                  title: String((args as { title?: unknown })?.title ?? ""),
+                  content: String((args as { content?: unknown })?.content ?? ""),
+                  source: "user-instruction",
+                  sourceRef: toolCtx.sessionID,
+                }),
+                signal: requestSignal(toolCtx.signal),
+              });
+              const body = await response.text();
+              if (!response.ok) return { content: describeIdeaHttpFailure("知识库", response.status) };
+              let parsed: unknown;
+              try { parsed = JSON.parse(body); } catch { return { content: "知识库返回的内容无法解析。" }; }
+              return { content: formatSavedIdea(parsed) };
+            } catch (error) {
+              return { content: describeIdeaNetworkFailure("知识库", error) };
+            }
+          },
+        });
+
+        editor.add({
+          name: "idea_search",
+          description: "在知识库里找以前记下的想法（用户问「之前是不是提过…」时用）",
+          input: {
+            type: "object",
+            properties: { query: { type: "string", description: "关键词" } },
+            required: ["query"],
+          },
+          options: { codemode: false },
+          async execute(args, toolCtx) {
+            try {
+              const configResult = parseConfig(readConfigText());
+              if (!configResult.ok) return { content: configResult.message };
+              const query = String((args as { query?: unknown })?.query ?? "").trim();
+              if (!query) return { content: "要给一个关键词才能查。" };
+              const response = await fetch(buildKbSearchUrl(configResult.config, query), {
+                method: "GET",
+                headers: { "x-internal-token": configResult.config.token },
+                signal: requestSignal(toolCtx.signal),
+              });
+              const body = await response.text();
+              if (!response.ok) return { content: describeIdeaHttpFailure("知识库", response.status) };
+              let parsed: unknown;
+              try { parsed = JSON.parse(body); } catch { return { content: "知识库返回的内容无法解析。" }; }
+              return { content: formatKbHits(parsed) };
+            } catch (error) {
+              return { content: describeIdeaNetworkFailure("知识库", error) };
             }
           },
         });
