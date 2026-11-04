@@ -52,7 +52,7 @@ describe("插件壳结构", () => {
     expect(() => (cleanup as () => void)()).not.toThrow();
   });
 
-  it("注册九个工具：assignment_history / project_sessions / today_brief / session_status + 三个续接标记 + 两个想法工具", async () => {
+  it("注册十个工具：assignment_history / project_sessions / today_brief / session_status + 三个续接标记 + 两个想法工具 + decision_save", async () => {
     const host = createFakeHost();
 
     await plugin.setup(host.ctx);
@@ -60,6 +60,7 @@ describe("插件壳结构", () => {
     expect(host.state.transformCalls).toBe(1);
     expect([...host.tools.keys()].sort()).toEqual([
       "assignment_history",
+      "decision_save",
       "idea_save",
       "idea_search",
       "project_sessions",
