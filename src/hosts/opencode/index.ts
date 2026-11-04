@@ -51,6 +51,12 @@ import {
   describeIdeaHttpFailure,
   describeIdeaNetworkFailure,
 } from "../../core/ideas.ts";
+import {
+  buildDecisionUrl,
+  describeDecisionHttpFailure,
+  describeDecisionNetworkFailure,
+  formatSavedDecision,
+} from "../../core/decisions.ts";
 import { buildSessionStatus, sessionUnavailableMessage } from "../../core/session-status.ts";
 import {
   buildProjectSessionsUrl,
@@ -403,6 +409,61 @@ export default Plugin.define({
               return { content: formatSavedIdea(parsed) };
             } catch (error) {
               return { content: describeIdeaNetworkFailure("知识库", error) };
+            }
+          },
+        });
+
+        editor.add({
+          name: "decision_save",
+          description:
+            "记录用户已经拍板的决定（含理由），写进知识库。只在用户明确说「就这么定」「按这个来」或要求记录时使用；讨论中还没定的不要记",
+          input: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "决策标题" },
+              decision: { type: "string", description: "定了什么" },
+              decidedBy: { type: "string", enum: ["user", "agent"], description: "谁拍板的" },
+              context: { type: "string", description: "背景（可选）" },
+              rationale: { type: "string", description: "为什么这么定（可选）" },
+              domain: { type: "string", description: "领域标签（可选）" },
+            },
+            required: ["title", "decision", "decidedBy"],
+          },
+          options: { codemode: false },
+          async execute(args, toolCtx) {
+            try {
+              const configResult = parseConfig(readConfigText());
+              if (!configResult.ok) return { content: configResult.message };
+              const input = args as {
+                title?: unknown;
+                decision?: unknown;
+                decidedBy?: unknown;
+                context?: unknown;
+                rationale?: unknown;
+                domain?: unknown;
+              };
+              const optional = (value: unknown): string | undefined =>
+                typeof value === "string" ? value : undefined;
+              const response = await fetch(buildDecisionUrl(configResult.config), {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-internal-token": configResult.config.token },
+                body: JSON.stringify({
+                  title: String(input.title ?? ""),
+                  decision: String(input.decision ?? ""),
+                  decidedBy: String(input.decidedBy ?? ""),
+                  context: optional(input.context),
+                  rationale: optional(input.rationale),
+                  domain: optional(input.domain),
+                }),
+                signal: requestSignal(toolCtx.signal),
+              });
+              const body = await response.text();
+              if (!response.ok) return { content: describeDecisionHttpFailure(response.status) };
+              let parsed: unknown;
+              try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+              return { content: formatSavedDecision(parsed) };
+            } catch (error) {
+              return { content: describeDecisionNetworkFailure(error) };
             }
           },
         });
