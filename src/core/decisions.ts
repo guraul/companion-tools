@@ -25,6 +25,7 @@ export function formatSavedDecision(payload: unknown): string {
 }
 
 export function describeDecisionHttpFailure(status: number): string {
+  if (status === 401) return "决策接口鉴权失败（配置问题，需要维护者处理）";
   if (status === 503) return "知识库没配置，暂时记不了决策。";
   return `决策接口返回 ${status}。`;
 }

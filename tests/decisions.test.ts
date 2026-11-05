@@ -38,4 +38,12 @@ describe("decisions 纯函数", () => {
       "连不上决策接口：ECONNREFUSED",
     );
   });
+
+  it("401 单独文案：鉴权失败（配置问题）", () => {
+    expect(describeDecisionHttpFailure(401)).toContain("鉴权失败");
+  });
+
+  it("503 仍说没配置（防回归）", () => {
+    expect(describeDecisionHttpFailure(503)).toContain("没配置");
+  });
 });
