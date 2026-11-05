@@ -424,7 +424,10 @@ export default Plugin.define({
               decision: { type: "string", description: "定了什么" },
               decidedBy: { type: "string", enum: ["user", "agent"], description: "谁拍板的" },
               context: { type: "string", description: "背景（可选）" },
-              rationale: { type: "string", description: "为什么这么定（可选）" },
+              rationale: {
+                type: "string",
+                description: "为什么这么定（可选）。用户没给理由就不要传这个字段，后端会写占位",
+              },
               domain: { type: "string", description: "领域标签（可选）" },
             },
             required: ["title", "decision", "decidedBy"],
@@ -444,13 +447,15 @@ export default Plugin.define({
               };
               const optional = (value: unknown): string | undefined =>
                 typeof value === "string" ? value : undefined;
+              const decidedBy = input.decidedBy === "user" || input.decidedBy === "agent" ? input.decidedBy : undefined;
+              if (!decidedBy) return { content: "这条得你明确拍板（就这么定/按这个来）才算决策" };
               const response = await fetch(buildDecisionUrl(configResult.config), {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "x-internal-token": configResult.config.token },
                 body: JSON.stringify({
                   title: String(input.title ?? ""),
                   decision: String(input.decision ?? ""),
-                  decidedBy: String(input.decidedBy ?? ""),
+                  decidedBy,
                   context: optional(input.context),
                   rationale: optional(input.rationale),
                   domain: optional(input.domain),
