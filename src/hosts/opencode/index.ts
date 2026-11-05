@@ -469,8 +469,8 @@ export default Plugin.define({
         });
 
         editor.add({
-          name: "idea_search",
-          description: "在知识库里找以前记下的想法（用户问「之前是不是提过…」时用）",
+          name: "kb_search",
+          description: "在知识库里搜索（含想法与决策）；用户问「之前是不是提过…」「当初为什么这么定」时用",
           input: {
             type: "object",
             properties: { query: { type: "string", description: "关键词" } },

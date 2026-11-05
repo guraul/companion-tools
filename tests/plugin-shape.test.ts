@@ -52,7 +52,7 @@ describe("插件壳结构", () => {
     expect(() => (cleanup as () => void)()).not.toThrow();
   });
 
-  it("注册十个工具：assignment_history / project_sessions / today_brief / session_status + 三个续接标记 + 两个想法工具 + decision_save", async () => {
+  it("注册十个工具：assignment_history / project_sessions / today_brief / session_status + 三个续接标记 + idea_save / kb_search + decision_save", async () => {
     const host = createFakeHost();
 
     await plugin.setup(host.ctx);
@@ -62,7 +62,7 @@ describe("插件壳结构", () => {
       "assignment_history",
       "decision_save",
       "idea_save",
-      "idea_search",
+      "kb_search",
       "project_sessions",
       "session_status",
       "thread_close",
