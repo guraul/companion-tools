@@ -58,6 +58,7 @@ import {
   formatSavedDecision,
 } from "../../core/decisions.ts";
 import { buildSessionStatus, sessionUnavailableMessage } from "../../core/session-status.ts";
+import { appendSnapshotToSystem, fetchContextSnapshot } from "../../core/context-snapshot.ts";
 import {
   buildProjectSessionsUrl,
   describeProjectSessionsHttpFailure,
@@ -103,6 +104,62 @@ export default Plugin.define({
     } catch {
       // trace must never escape
     }
+
+    // ---- 自动注入：她此刻的处境（用户 2026-11-09 拍板）----
+    // 为什么用缓存而不是每步现拉：hook 是同步回调，现拉会把每轮请求拖慢几百毫秒；
+    // 5 分钟的新鲜度对「今天要你注意什么 / 最近在忙什么」足够。
+    // 失败即静默：拉不到就沿用上一份（或什么都不注入），绝不把错误塞进 system。
+    let snapshot = "";
+    let snapshotAt = 0;
+    const refreshSnapshot = async (): Promise<void> => {
+      try {
+        const configResult = parseConfig(readConfigText());
+        if (!configResult.ok) return;
+        const next = await fetchContextSnapshot({
+          config: configResult.config,
+          fetchImpl: fetch as unknown as Parameters<typeof fetchContextSnapshot>[0]["fetchImpl"],
+          formatBrief: (parsed) => formatTodayBrief(parsed),
+        });
+        if (next !== null) {
+          snapshot = next;
+          snapshotAt = Date.now();
+        }
+      } catch {
+        // 刷新失败不改变已有快照
+      }
+    };
+    // 懒启动：第一次真的有 companion 会话时才去拉，避免纯工具测试 / 非伴侣 agent 也发请求。
+    let refreshLoopStarted = false;
+    const ensureRefreshLoop = (): void => {
+      if (refreshLoopStarted) return;
+      refreshLoopStarted = true;
+      void refreshSnapshot();
+      try {
+        const timer = setInterval(() => void refreshSnapshot(), 5 * 60 * 1000);
+        (timer as unknown as { unref?: () => void }).unref?.();
+      } catch {
+        // 定时器失败只影响新鲜度，不影响注入
+      }
+    };
+
+    try {
+      ctx.session.hook("context", (event) => {
+        try {
+          // 只对伴侣生效：build / plan / general 等 agent 不该收到这份处境
+          const agent = (event as { agent?: unknown }).agent;
+          if (agent !== "companion") return;
+          ensureRefreshLoop();
+          if (snapshot.length === 0) return;
+          const system = (event as { system?: Array<{ type: "text"; text: string }> }).system;
+          appendSnapshotToSystem(system, snapshot);
+        } catch {
+          // hook 抛出去会炸宿主组装管线：一律吞掉
+        }
+      });
+    } catch {
+      // 注册失败 = 不注入，不影响工具
+    }
+    void snapshotAt;
 
     try {
       const key = `${STORAGE_PREFIX}loads`;
