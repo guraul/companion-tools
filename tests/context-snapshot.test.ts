@@ -7,6 +7,8 @@ import {
   SNAPSHOT_HEADER,
   MAX_BUSY_PROJECTS,
   fetchContextSnapshot,
+  appendSnapshotToSystem,
+  SNAPSHOT_MAX_LINES,
 } from "../src/core/context-snapshot.ts";
 import type { CompanionConfig } from "../src/core/config.ts";
 
@@ -113,5 +115,35 @@ describe("fetchContextSnapshot", () => {
       throw new Error("ECONNREFUSED");
     });
     expect(await fetchContextSnapshot({ config, fetchImpl, formatBrief: () => "x" })).toBeNull();
+  });
+});
+
+describe("appendSnapshotToSystem（hook 接线语义）", () => {
+  it("追加一次成功，重复调用不重复追加（幂等）", () => {
+    const system: Array<{ type: "text"; text: string }> = [{ type: "text", text: "宿主原有提示" }];
+    expect(appendSnapshotToSystem(system, "快照A")).toBe(true);
+    expect(appendSnapshotToSystem(system, "快照A")).toBe(false);
+    expect(system).toHaveLength(2);
+    expect(system[1]!.text).toBe("快照A");
+  });
+
+  it("快照为空 / system 不是数组 → 不追加也不抛", () => {
+    expect(appendSnapshotToSystem([], "")).toBe(false);
+    expect(appendSnapshotToSystem(undefined, "x")).toBe(false);
+  });
+
+  it("已含表头的块视为已注入（即使文本不同）", () => {
+    const system: Array<{ type: "text"; text: string }> = [{ type: "text", text: `${SNAPSHOT_HEADER}\n旧内容` }];
+    expect(appendSnapshotToSystem(system, `${SNAPSHOT_HEADER}\n新内容`)).toBe(false);
+    expect(system).toHaveLength(1);
+  });
+});
+
+describe("行数上限（含表头与省略行）", () => {
+  it("截断路径也不超过 SNAPSHOT_MAX_LINES", () => {
+    const brief = Array.from({ length: 30 }, (_, i) => `行${i}`).join("\n");
+    const out = buildContextSnapshot({ todayBrief: brief })!;
+    expect(out.split("\n").length).toBeLessThanOrEqual(SNAPSHOT_MAX_LINES);
+    expect(out).toContain("其余略");
   });
 });

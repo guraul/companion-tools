@@ -58,7 +58,7 @@ import {
   formatSavedDecision,
 } from "../../core/decisions.ts";
 import { buildSessionStatus, sessionUnavailableMessage } from "../../core/session-status.ts";
-import { fetchContextSnapshot } from "../../core/context-snapshot.ts";
+import { appendSnapshotToSystem, fetchContextSnapshot } from "../../core/context-snapshot.ts";
 import {
   buildProjectSessionsUrl,
   describeProjectSessionsHttpFailure,
@@ -151,8 +151,7 @@ export default Plugin.define({
           ensureRefreshLoop();
           if (snapshot.length === 0) return;
           const system = (event as { system?: Array<{ type: "text"; text: string }> }).system;
-          if (!Array.isArray(system)) return;
-          system.push({ type: "text", text: snapshot });
+          appendSnapshotToSystem(system, snapshot);
         } catch {
           // hook 抛出去会炸宿主组装管线：一律吞掉
         }

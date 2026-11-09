@@ -108,10 +108,29 @@ export function buildContextSnapshot(parts: SnapshotParts): string | null {
 
   if (lines.length === 0) return null;
 
-  const budget = SNAPSHOT_MAX_LINES - 1; // 减去标题行
+  // 预算要同时扣掉表头与可能的省略行，否则截断路径会超出 SNAPSHOT_MAX_LINES
+  const budget = SNAPSHOT_MAX_LINES - 2;
   const shown = lines.slice(0, budget);
   if (lines.length > budget) shown.push("…（其余略）");
   return [SNAPSHOT_HEADER, ...shown].join("\n");
+}
+
+/**
+ * 把快照追加进宿主给的 system 片段数组。**幂等**：已含本块表头就不再追加
+ * （若宿主跨 step 复用同一数组，重复 push 会让上下文线性膨胀）。
+ * 返回是否真的追加了（供接线测试断言）。
+ */
+export function appendSnapshotToSystem(
+  system: Array<{ type: "text"; text: string }> | undefined,
+  snapshot: string,
+): boolean {
+  if (!Array.isArray(system) || snapshot.length === 0) return false;
+  const already = system.some(
+    (part) => typeof part?.text === "string" && (part.text === snapshot || part.text.startsWith(SNAPSHOT_HEADER)),
+  );
+  if (already) return false;
+  system.push({ type: "text", text: snapshot });
+  return true;
 }
 
 /** 注入块的总字符上限（防御上游脏数据把 system 撑爆）。 */
